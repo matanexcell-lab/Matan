@@ -1,22 +1,7 @@
-<!DOCTYPE html>
-<html lang="he">
-<head>
-  <meta charset="UTF-8">
-  <title>טיימר משימות</title>
-  <link rel="stylesheet" href="/static/style.css">
-</head>
-<body>
-  <h1>⏳ טיימר משימות</h1>
-
-  <div>
-    <input id="taskName" placeholder="שם משימה">
-    <input id="taskMinutes" type="number" placeholder="משך בדקות">
-    <button onclick="addTask()">הוסף משימה</button>
-  </div>
-
-  <h2>משימות:</h2>
-  <div id="tasks"></div>
-
-  <script src="/static/script.js"></script>
-</body>
-</html>
+<div>
+  <input id="taskName" placeholder="שם משימה">
+  <input id="taskHours" type="number" placeholder="שעות" min="0">
+  <input id="taskMinutes" type="number" placeholder="דקות" min="0">
+  <input id="taskSeconds" type="number" placeholder="שניות" min="0">
+  <button onclick="addTask()">הוסף משימה</button>
+</div>
