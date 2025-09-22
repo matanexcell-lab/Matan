@@ -7,17 +7,22 @@ async function loadTasks() {
 
   tasks.forEach(t => {
     let div = document.createElement("div");
-    let endTime = new Date(t.end_time * 1000);
+    let endTime = t.end_time > 0 ? new Date(t.end_time * 1000) : null;
     let now = new Date();
-    let remaining = Math.max(0, Math.floor((t.end_time * 1000 - now) / 1000));
+
+    let remaining = 0;
+    if (t.status === "running") {
+      remaining = Math.max(0, Math.floor((t.end_time * 1000 - now) / 1000));
+    }
+
     let hrs = Math.floor(remaining / 3600);
     let mins = Math.floor((remaining % 3600) / 60);
     let secs = remaining % 60;
 
     div.innerHTML = `
       <b>${t.name}</b> - מצב: ${t.status}<br>
-      ⏱ נותר: ${hrs}:${mins.toString().padStart(2,"0")}:${secs.toString().padStart(2,"0")}<br>
-      🕒 סיום משוער: ${endTime.toLocaleTimeString()}<br>
+      ${t.status === "running" ? `⏱ נותר: ${hrs}:${mins.toString().padStart(2,"0")}:${secs.toString().padStart(2,"0")}<br>` : ""}
+      ${endTime ? `🕒 סיום משוער: ${endTime.toLocaleTimeString()}<br>` : ""}
       <button onclick="pauseTask(${t.id})">עצור</button>
       <button onclick="resumeTask(${t.id})">המשך</button>
       <button onclick="finishTask(${t.id})">סיים</button>
@@ -46,7 +51,7 @@ async function pauseTask(id) {
   await fetch("/pause_task", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({id})
+    body: JSON.stringify({id: Number(id)})
   });
   loadTasks();
 }
@@ -55,7 +60,7 @@ async function resumeTask(id) {
   await fetch("/resume_task", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({id})
+    body: JSON.stringify({id: Number(id)})
   });
   loadTasks();
 }
@@ -64,7 +69,7 @@ async function finishTask(id) {
   await fetch("/finish_task", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({id})
+    body: JSON.stringify({id: Number(id)})
   });
   loadTasks();
 }
