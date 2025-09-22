@@ -1,20 +1,23 @@
-<ul>
-  {% for task in tasks %}
-  <li>
-    {{ task.title }}
-    <button onclick="openEditModal('{{ task.id }}')">ערוך</button>
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>⏱ טיימר משימות</title>
 
-    <!-- חלון עריכה -->
-    <div id="editModal-{{ task.id }}" class="modal">
-      <div class="modal-content">
-        <span onclick="closeEditModal('{{ task.id }}')" class="close">&times;</span>
-        <form onsubmit="saveEdit(event, '{{ task.id }}')">
-          <label>שם משימה:</label>
-          <input type="text" id="taskTitle-{{ task.id }}" value="{{ task.title }}">
-          <button type="submit">שמור</button>
-        </form>
-      </div>
-    </div>
-  </li>
-  {% endfor %}
-</ul>
+    <!-- חיבור ל-CSS דרך Flask -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <h1>⏱ טיימר משימות</h1>
+
+    <p id="status">אין משימה פעילה</p>
+    <div id="timer">00:00:00</div>
+
+    <button onclick="startTimer()">התחל</button>
+    <button onclick="stopTimer()">עצור</button>
+    <button onclick="resetTimer()">אפס</button>
+
+    <!-- חיבור ל-JS דרך Flask -->
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
