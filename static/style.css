@@ -34,7 +34,11 @@ button:hover {
 #tasks {
   margin-top: 20px;
   text-align: right;
+}
+
+#tasks div {
   background: #fff;
-  padding: 15px;
-  border-radius: 8px;
+  padding: 10px;
+  margin: 10px 0;
+  border-radius: 6px;
 }
