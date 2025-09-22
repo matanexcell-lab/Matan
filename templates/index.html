@@ -1,25 +1,22 @@
 <!DOCTYPE html>
 <html lang="he">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>טיימר משימות</title>
-    <!-- חיבור ל-CSS -->
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <meta charset="UTF-8">
+  <title>טיימר משימות</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="container">
-        <h1>⏱ טיימר משימות</h1>
-        <div id="taskName">אין משימה פעילה</div>
-        <div id="timer">00:00</div>
-        <div class="buttons">
-            <button onclick="startTimer()">התחל</button>
-            <button onclick="stopTimer()">עצור</button>
-            <button onclick="resetTimer()">אפס</button>
-        </div>
-    </div>
+  <h1>⏳ טיימר משימות</h1>
 
-    <!-- חיבור ל-JS -->
-    <script src="{{ url_for('static', filename='script.js') }}"></script>
+  <div>
+    <input id="taskName" placeholder="שם משימה">
+    <input id="taskMinutes" type="number" placeholder="משך בדקות">
+    <button onclick="addTask()">הוסף משימה</button>
+  </div>
+
+  <h2>משימות:</h2>
+  <div id="tasks"></div>
+
+  <script src="/static/script.js"></script>
 </body>
 </html>
