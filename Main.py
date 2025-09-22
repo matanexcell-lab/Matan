@@ -14,17 +14,6 @@ def save_tasks(tasks):
     with open(TASKS_FILE, "w", encoding="utf-8") as f:
         json.dump(tasks, f, ensure_ascii=False, indent=2)
 
-def start_next_task(tasks):
-    running = any(t["status"] == "running" for t in tasks)
-    if not running:
-        for task in tasks:
-            if task["status"] == "waiting":
-                task["status"] = "running"
-                task["start_time"] = time.time()
-                task["end_time"] = task["start_time"] + task["duration"]
-                break
-    return tasks
-
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -32,13 +21,13 @@ def index():
 @app.route("/get_tasks")
 def get_tasks():
     tasks = load_tasks()
+    now = time.time()
     changed = False
     for task in tasks:
-        if task["status"] == "running" and time.time() >= task["end_time"]:
+        if task["status"] == "running" and now >= task["end_time"]:
             task["status"] = "finished"
             changed = True
     if changed:
-        tasks = start_next_task(tasks)
         save_tasks(tasks)
     return jsonify(tasks)
 
@@ -58,7 +47,20 @@ def add_task():
     }
     tasks = load_tasks()
     tasks.append(task)
-    tasks = start_next_task(tasks)
+    save_tasks(tasks)
+    return jsonify({"success": True})
+
+@app.route("/start_task", methods=["POST"])
+def start_task():
+    data = request.get_json()
+    task_id = int(data.get("id"))
+    tasks = load_tasks()
+    for task in tasks:
+        if task["id"] == task_id and task["status"] == "waiting":
+            task["status"] = "running"
+            task["start_time"] = time.time()
+            task["end_time"] = task["start_time"] + task["duration"]
+            break
     save_tasks(tasks)
     return jsonify({"success": True})
 
@@ -96,7 +98,6 @@ def finish_task():
     for task in tasks:
         if task["id"] == task_id:
             task["status"] = "finished"
-    tasks = start_next_task(tasks)
     save_tasks(tasks)
     return jsonify({"success": True})
 
@@ -106,7 +107,6 @@ def delete_task():
     task_id = int(data.get("id"))
     tasks = load_tasks()
     tasks = [t for t in tasks if t["id"] != task_id]
-    tasks = start_next_task(tasks)
     save_tasks(tasks)
     return jsonify({"success": True})
 
