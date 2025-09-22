@@ -10,13 +10,14 @@ async function loadTasks() {
     let endTime = new Date(t.end_time * 1000);
     let now = new Date();
     let remaining = Math.max(0, Math.floor((t.end_time * 1000 - now) / 1000));
-    let min = Math.floor(remaining / 60);
-    let sec = remaining % 60;
+    let hrs = Math.floor(remaining / 3600);
+    let mins = Math.floor((remaining % 3600) / 60);
+    let secs = remaining % 60;
 
     div.innerHTML = `
-      <b>${t.name}</b> - מצב: ${t.status}  
-      ⏱ נותר: ${min}:${sec.toString().padStart(2,"0")}  
-      🕒 סיום משוער: ${endTime.toLocaleTimeString()}
+      <b>${t.name}</b> - מצב: ${t.status}<br>
+      ⏱ נותר: ${hrs}:${mins.toString().padStart(2,"0")}:${secs.toString().padStart(2,"0")}<br>
+      🕒 סיום משוער: ${endTime.toLocaleTimeString()}<br>
       <button onclick="pauseTask(${t.id})">עצור</button>
       <button onclick="resumeTask(${t.id})">המשך</button>
       <button onclick="finishTask(${t.id})">סיים</button>
@@ -27,11 +28,16 @@ async function loadTasks() {
 
 async function addTask() {
   let name = document.getElementById("taskName").value;
-  let minutes = document.getElementById("taskMinutes").value;
+  let hours = parseInt(document.getElementById("taskHours").value) || 0;
+  let minutes = parseInt(document.getElementById("taskMinutes").value) || 0;
+  let seconds = parseInt(document.getElementById("taskSeconds").value) || 0;
+
+  let totalSeconds = hours * 3600 + minutes * 60 + seconds;
+
   await fetch("/add_task", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify({name, minutes})
+    body: JSON.stringify({name, seconds: totalSeconds})
   });
   loadTasks();
 }
