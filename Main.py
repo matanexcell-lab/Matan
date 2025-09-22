@@ -1,6 +1,5 @@
 from flask import Flask, render_template, request, jsonify
 import json, os, time
-from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -22,22 +21,21 @@ def index():
 
 @app.route("/get_tasks")
 def get_tasks():
-    tasks = load_tasks()
-    return jsonify(tasks)
+    return jsonify(load_tasks())
 
 @app.route("/add_task", methods=["POST"])
 def add_task():
     data = request.get_json()
     name = data.get("name")
-    minutes = int(data.get("minutes", 0))
+    seconds = int(data.get("seconds", 0))
 
     start_time = time.time()
-    end_time = start_time + minutes * 60
+    end_time = start_time + seconds
 
     task = {
         "id": int(start_time),
         "name": name,
-        "minutes": minutes,
+        "duration": seconds,
         "status": "running",
         "start_time": start_time,
         "end_time": end_time,
