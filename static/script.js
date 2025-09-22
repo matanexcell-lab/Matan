@@ -1,20 +1,37 @@
-function openEditModal(taskId) {
-  const modal = document.getElementById("editModal-" + taskId);
-  modal.style.display = "block";
+let timer;
+let seconds = 0;
+let running = false;
+
+function updateDisplay() {
+    let hrs = String(Math.floor(seconds / 3600)).padStart(2, '0');
+    let mins = String(Math.floor((seconds % 3600) / 60)).padStart(2, '0');
+    let secs = String(seconds % 60).padStart(2, '0');
+    document.getElementById("timer").innerText = `${hrs}:${mins}:${secs}`;
 }
 
-function closeEditModal(taskId) {
-  const modal = document.getElementById("editModal-" + taskId);
-  modal.style.display = "none";
+function startTimer() {
+    if (!running) {
+        running = true;
+        document.getElementById("status").innerText = "⏳ משימה פעילה";
+        timer = setInterval(() => {
+            seconds++;
+            updateDisplay();
+        }, 1000);
+    }
 }
 
-function saveEdit(event, taskId) {
-  event.preventDefault(); // מונע רענון דף
-
-  const newTitle = document.getElementById("taskTitle-" + taskId).value;
-  
-  // כאן אפשר לקרוא לשרת (באמצעות fetch) כדי לשמור את השינוי
-  console.log("שמירת משימה", taskId, "כ:", newTitle);
-
-  closeEditModal(taskId);
+function stopTimer() {
+    running = false;
+    document.getElementById("status").innerText = "⏸️ הושבת";
+    clearInterval(timer);
 }
+
+function resetTimer() {
+    running = false;
+    clearInterval(timer);
+    seconds = 0;
+    document.getElementById("status").innerText = "אין משימה פעילה";
+    updateDisplay();
+}
+
+updateDisplay();
