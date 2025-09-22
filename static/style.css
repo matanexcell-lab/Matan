@@ -2,7 +2,9 @@ body {
   font-family: Arial, sans-serif;
   direction: rtl;
   text-align: center;
-  background: #f9f9f9;
+  background: #f2f2f2;
+  margin: 0;
+  padding: 20px;
 }
 
 h1 {
@@ -31,4 +33,8 @@ button:hover {
 
 #tasks {
   margin-top: 20px;
+  text-align: right;
+  background: #fff;
+  padding: 15px;
+  border-radius: 8px;
 }
