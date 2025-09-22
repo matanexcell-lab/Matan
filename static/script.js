@@ -1,12 +1,12 @@
 async function loadTasks() {
   let res = await fetch("/get_tasks");
   let tasks = await res.json();
-
   let container = document.getElementById("tasks");
   container.innerHTML = "";
 
   tasks.forEach(t => {
     let div = document.createElement("div");
+    div.id = `task-${t.id}`;
     let now = new Date();
     let remaining = 0;
 
@@ -19,18 +19,18 @@ async function loadTasks() {
     let hrs = Math.floor(remaining / 3600);
     let mins = Math.floor((remaining % 3600) / 60);
     let secs = remaining % 60;
-
     let endTime = t.end_time > 0 ? new Date(t.end_time * 1000) : null;
 
     div.innerHTML = `
       <b>${t.name}</b> - מצב: ${t.status}<br>
       ⏱ נותר: ${hrs}:${mins.toString().padStart(2,"0")}:${secs.toString().padStart(2,"0")}<br>
       ${endTime ? `🕒 סיום משוער: ${endTime.toLocaleTimeString()}<br>` : ""}
+      ${t.status === "waiting" ? `<button onclick="startTask(${t.id})">▶ התחל</button>` : ""}
       <button onclick="pauseTask(${t.id})">⏸ עצור</button>
       <button onclick="resumeTask(${t.id})">▶ המשך</button>
       <button onclick="finishTask(${t.id})">✔ סיים</button>
       <button onclick="deleteTask(${t.id})">🗑 מחק</button>
-      <button onclick="editTask(${t.id}, '${t.name}')">✏ ערוך</button>
+      <button onclick="showEditForm(${t.id}, '${t.name}')">✏ ערוך</button>
     `;
     container.appendChild(div);
   });
@@ -48,6 +48,15 @@ async function addTask() {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify({name, seconds: totalSeconds})
+  });
+  loadTasks();
+}
+
+async function startTask(id) {
+  await fetch("/start_task", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({id: Number(id)})
   });
   loadTasks();
 }
@@ -88,14 +97,25 @@ async function deleteTask(id) {
   loadTasks();
 }
 
-async function editTask(id, currentName) {
-  let newName = prompt("שם חדש:", currentName);
-  if (!newName) return;
+function showEditForm(id, currentName) {
+  let div = document.getElementById(`task-${id}`);
+  let formDiv = document.createElement("div");
+  formDiv.innerHTML = `
+    <input id="editName${id}" value="${currentName}">
+    <input id="editHours${id}" type="number" placeholder="שעות" min="0">
+    <input id="editMinutes${id}" type="number" placeholder="דקות" min="0">
+    <input id="editSeconds${id}" type="number" placeholder="שניות" min="0">
+    <button onclick="saveEdit(${id})">שמור</button>
+    <button onclick="loadTasks()">ביטול</button>
+  `;
+  div.appendChild(formDiv);
+}
 
-  let hours = parseInt(prompt("כמה שעות?")) || 0;
-  let minutes = parseInt(prompt("כמה דקות?")) || 0;
-  let seconds = parseInt(prompt("כמה שניות?")) || 0;
-
+async function saveEdit(id) {
+  let newName = document.getElementById(`editName${id}`).value;
+  let hours = parseInt(document.getElementById(`editHours${id}`).value) || 0;
+  let minutes = parseInt(document.getElementById(`editMinutes${id}`).value) || 0;
+  let seconds = parseInt(document.getElementById(`editSeconds${id}`).value) || 0;
   let totalSeconds = hours * 3600 + minutes * 60 + seconds;
 
   await fetch("/edit_task", {
