@@ -15,13 +15,37 @@ def save_tasks(tasks):
     with open(TASKS_FILE, "w", encoding="utf-8") as f:
         json.dump(tasks, f, ensure_ascii=False, indent=2)
 
+def start_next_task(tasks):
+    """מפעיל את המשימה הבאה אם אין רצה כרגע"""
+    running = any(t["status"] == "running" for t in tasks)
+    if not running:
+        for task in tasks:
+            if task["status"] == "waiting":
+                task["status"] = "running"
+                task["start_time"] = time.time()
+                task["end_time"] = task["start_time"] + task["duration"]
+                break
+    return tasks
+
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/get_tasks")
 def get_tasks():
-    return jsonify(load_tasks())
+    tasks = load_tasks()
+
+    # עדכון משימות שהסתיימו
+    changed = False
+    for task in tasks:
+        if task["status"] == "running" and time.time() >= task["end_time"]:
+            task["status"] = "finished"
+            changed = True
+    if changed:
+        tasks = start_next_task(tasks)
+        save_tasks(tasks)
+
+    return jsonify(tasks)
 
 @app.route("/add_task", methods=["POST"])
 def add_task():
@@ -29,29 +53,27 @@ def add_task():
     name = data.get("name")
     seconds = int(data.get("seconds", 0))
 
-    start_time = time.time()
-    end_time = start_time + seconds
-
     task = {
-        "id": int(start_time),
+        "id": int(time.time() * 1000),  # מזהה ייחודי
         "name": name,
         "duration": seconds,
-        "status": "running",
-        "start_time": start_time,
-        "end_time": end_time,
+        "status": "waiting",
+        "start_time": 0,
+        "end_time": 0,
         "paused_time": 0
     }
 
     tasks = load_tasks()
     tasks.append(task)
+    tasks = start_next_task(tasks)  # אם אין רצה – תתחיל מייד
     save_tasks(tasks)
 
-    return jsonify({"success": True, "task": task})
+    return jsonify({"success": True})
 
 @app.route("/pause_task", methods=["POST"])
 def pause_task():
     data = request.get_json()
-    task_id = data.get("id")
+    task_id = int(data.get("id"))
     tasks = load_tasks()
     for task in tasks:
         if task["id"] == task_id and task["status"] == "running":
@@ -63,7 +85,7 @@ def pause_task():
 @app.route("/resume_task", methods=["POST"])
 def resume_task():
     data = request.get_json()
-    task_id = data.get("id")
+    task_id = int(data.get("id"))
     tasks = load_tasks()
     for task in tasks:
         if task["id"] == task_id and task["status"] == "paused":
@@ -77,11 +99,12 @@ def resume_task():
 @app.route("/finish_task", methods=["POST"])
 def finish_task():
     data = request.get_json()
-    task_id = data.get("id")
+    task_id = int(data.get("id"))
     tasks = load_tasks()
     for task in tasks:
         if task["id"] == task_id:
             task["status"] = "finished"
+    tasks = start_next_task(tasks)
     save_tasks(tasks)
     return jsonify({"success": True})
 
