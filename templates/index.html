@@ -1,123 +1,75 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="he">
 <head>
-    <meta charset="UTF-8">
-    <title>⏱ טיימר משימות</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            background: #f7f7f7;
-            margin: 0;
-            padding: 20px;
+  <meta charset="UTF-8">
+  <title>⏱️ טיימר משימות</title>
+  <script>
+    async function addTask() {
+      const name = document.getElementById("name").value;
+      const hours = document.getElementById("hours").value;
+      const minutes = document.getElementById("minutes").value;
+      const seconds = document.getElementById("seconds").value;
+
+      await fetch("/add", {
+        method: "POST",
+        body: new URLSearchParams({name, hours, minutes, seconds})
+      });
+      location.reload();
+    }
+
+    async function startTask(id) {
+      await fetch(`/start/${id}`, {method: "POST"});
+    }
+
+    async function pauseTask(id) {
+      await fetch(`/pause/${id}`, {method: "POST"});
+    }
+
+    async function deleteTask(id) {
+      await fetch(`/delete/${id}`, {method: "DELETE"});
+      location.reload();
+    }
+
+    async function updateTimers() {
+      const timers = document.querySelectorAll(".task");
+      for (let t of timers) {
+        const id = t.dataset.id;
+        const res = await fetch(`/remaining/${id}`);
+        const data = await res.json();
+        if (data.remaining_seconds !== undefined) {
+          const sec = data.remaining_seconds;
+          const h = Math.floor(sec / 3600);
+          const m = Math.floor((sec % 3600) / 60);
+          const s = sec % 60;
+          t.querySelector(".remaining").innerText = `${h}:${m}:${s}`;
         }
-        h1 { margin-bottom: 20px; }
-        .task-list { margin-top: 30px; }
-        .task {
-            background: white;
-            border-radius: 8px;
-            padding: 10px;
-            margin: 10px auto;
-            width: 90%;
-            max-width: 600px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .task h3 { margin: 5px 0; }
-        .controls button {
-            margin: 5px;
-            padding: 5px 10px;
-        }
-        input {
-            width: 60px;
-            padding: 5px;
-            margin: 3px;
-            text-align: center;
-        }
-        .footer { margin-top: 20px; font-weight: bold; }
-    </style>
+      }
+    }
+    setInterval(updateTimers, 1000);
+  </script>
 </head>
 <body>
+  <h1>⏱️ טיימר משימות</h1>
 
-<h1>⏱ טיימר משימות</h1>
+  <div>
+    <input id="name" placeholder="שם משימה">
+    <input id="hours" type="number" placeholder="שעות" value="0">
+    <input id="minutes" type="number" placeholder="דקות" value="0">
+    <input id="seconds" type="number" placeholder="שניות" value="0">
+    <button onclick="addTask()">➕ הוסף משימה</button>
+  </div>
 
-<!-- הוספת משימה -->
-<form action="/add" method="post">
-    <input type="text" name="name" placeholder="שם משימה" required>
-    <input type="number" name="hours" placeholder="שעות" min="0">
-    <input type="number" name="minutes" placeholder="דקות" min="0" max="59">
-    <input type="number" name="seconds" placeholder="שניות" min="0" max="59">
-    <button type="submit">➕ הוסף משימה</button>
-</form>
-
-<!-- רשימת משימות -->
-<div class="task-list">
-    {% if tasks %}
-        {% for task in tasks %}
-        <div class="task" id="task-{{ task.id }}">
-            <h3>{{ task.name }}</h3>
-            <p>
-                סטטוס: <span id="status-{{ task.id }}">{{ task.status }}</span><br>
-                נותר: <span id="remaining-{{ task.id }}">
-                    {{ "%02d:%02d:%02d" % (task.hours, task.minutes, task.seconds) }}
-                </span><br>
-                {% if task.end_time %}
-                    שעת סיום: {{ task.end_time.strftime("%H:%M:%S") }}
-                {% endif %}
-            </p>
-            <div class="controls">
-                <a href="/start/{{ task.id }}"><button>▶ התחל</button></a>
-                <a href="/pause/{{ task.id }}"><button>⏸ השהה</button></a>
-                <a href="/finish/{{ task.id }}"><button>✔ סיים</button></a>
-                <a href="/delete/{{ task.id }}"><button>🗑 מחק</button></a>
-            </div>
-            <!-- עריכה -->
-            <form action="/edit/{{ task.id }}" method="post" style="margin-top:10px;">
-                <input type="text" name="name" value="{{ task.name }}">
-                <input type="number" name="hours" value="{{ task.hours }}">
-                <input type="number" name="minutes" value="{{ task.minutes }}">
-                <input type="number" name="seconds" value="{{ task.seconds }}">
-                <button type="submit">✏ ערוך</button>
-            </form>
-        </div>
-        {% endfor %}
-    {% else %}
-        <p>🚀 אין משימות כרגע</p>
-    {% endif %}
-</div>
-
-<!-- שעת סיום כוללת -->
-<div class="footer">
-    {% if total_end_time %}
-        ⏰ שעת סיום כוללת: {{ total_end_time }}
-    {% endif %}
-</div>
-
-<!-- JavaScript לעדכון בזמן אמת -->
-<script>
-function updateRemaining(taskId) {
-    fetch(`/remaining/${taskId}`)
-        .then(res => res.json())
-        .then(data => {
-            document.getElementById(`remaining-${taskId}`).innerText = data.time;
-            document.getElementById(`status-${taskId}`).innerText = data.status;
-
-            // אם המשימה הסתיימה → להתחיל את הבאה אוטומטית
-            if (data.status === "finished") {
-                let next = document.querySelector(`#task-${taskId}`).nextElementSibling;
-                if (next) {
-                    let nextId = next.id.split("-")[1];
-                    window.location.href = `/start/${nextId}`;
-                }
-            }
-        })
-        .catch(err => console.error("שגיאה:", err));
-}
-
-// הפעלת עדכון כל שנייה לכל המשימות
-{% for task in tasks %}
-setInterval(() => updateRemaining({{ task.id }}), 1000);
-{% endfor %}
-</script>
-
+  <h2>רשימת משימות</h2>
+  <ul>
+    {% for task in tasks %}
+      <li class="task" data-id="{{task.id}}">
+        <b>{{task.name}}</b> | נותר: 
+        <span class="remaining">--:--:--</span>
+        <button onclick="startTask({{task.id}})">▶️ התחל</button>
+        <button onclick="pauseTask({{task.id}})">⏸️ השהה</button>
+        <button onclick="deleteTask({{task.id}})">🗑️ מחק</button>
+      </li>
+    {% endfor %}
+  </ul>
 </body>
 </html>
