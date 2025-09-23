@@ -1,10 +1,12 @@
 from flask import Flask, render_template, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
+from pytz import timezone
 
 app = Flask(__name__)
 app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///tasks.db"
 db = SQLAlchemy(app)
+
 
 # ===== מודל טבלה =====
 class Task(db.Model):
@@ -29,8 +31,10 @@ class Task(db.Model):
         m, s = divmod(m, 60)
         return f"{h:02}:{m:02}:{s:02}"
 
+
 with app.app_context():
     db.create_all()
+
 
 # ===== פונקציה כללית: עדכון רצף =====
 def update_sequence(finished_task_id=None):
@@ -39,7 +43,8 @@ def update_sequence(finished_task_id=None):
         finished = Task.query.get(finished_task_id)
         if finished:
             finished.status = "הסתיים"
-            finished.end_time = datetime.utcnow()
+            finished.start_time = None
+            finished.end_time = None
             db.session.commit()
 
     # מציאת המשימה הבאה
@@ -49,6 +54,7 @@ def update_sequence(finished_task_id=None):
         next_task.end_time = next_task.start_time + timedelta(seconds=next_task.duration)
         next_task.status = "רץ"
         db.session.commit()
+
 
 # ===== דף ראשי =====
 @app.route("/")
@@ -64,9 +70,12 @@ def index():
                 current_time = t.end_time
             elif t.status == "מושהה" and t.duration > 0:
                 current_time += timedelta(seconds=t.duration)
-        total_end_time = current_time.strftime("%H:%M:%S")
+        if current_time:
+            israel = timezone("Asia/Jerusalem")
+            total_end_time = current_time.astimezone(israel).strftime("%H:%M:%S")
 
     return render_template("index.html", tasks=tasks, total_end_time=total_end_time)
+
 
 # ===== הוספת משימה =====
 @app.route("/add", methods=["POST"])
@@ -83,18 +92,20 @@ def add_task():
     db.session.commit()
     return redirect(url_for("index"))
 
+
 # ===== התחלת משימה =====
 @app.route("/start/<int:task_id>")
 def start_task(task_id):
     task = Task.query.get(task_id)
     if task:
-        # אם היא מושהית או הראשונה
+        # רק אם היא מושהית או נעצרה
         if task.status in ["מושהה", "עצורה"]:
             task.start_time = datetime.utcnow()
             task.end_time = task.start_time + timedelta(seconds=task.duration)
             task.status = "רץ"
             db.session.commit()
     return redirect(url_for("index"))
+
 
 # ===== עצירת משימה =====
 @app.route("/pause/<int:task_id>")
@@ -108,22 +119,25 @@ def pause_task(task_id):
         db.session.commit()
     return redirect(url_for("index"))
 
+
 # ===== איפוס משימה =====
 @app.route("/reset/<int:task_id>")
 def reset_task(task_id):
     task = Task.query.get(task_id)
     if task:
-        task.status = "מושהה"
+        task.status = "מושהה"  # לא מתחיל אוטומטית
         task.start_time = None
         task.end_time = None
         db.session.commit()
     return redirect(url_for("index"))
+
 
 # ===== סיום משימה =====
 @app.route("/finish/<int:task_id>")
 def finish_task(task_id):
     update_sequence(finished_task_id=task_id)
     return redirect(url_for("index"))
+
 
 # ===== עריכת משימה =====
 @app.route("/edit/<int:task_id>", methods=["POST"])
@@ -141,6 +155,7 @@ def edit_task(task_id):
         db.session.commit()
     return redirect(url_for("index"))
 
+
 # ===== מחיקת משימה =====
 @app.route("/delete/<int:task_id>")
 def delete_task(task_id):
@@ -149,6 +164,7 @@ def delete_task(task_id):
         db.session.delete(task)
         db.session.commit()
     return redirect(url_for("index"))
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
