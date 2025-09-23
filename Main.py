@@ -5,7 +5,6 @@ import pytz
 app = Flask(__name__)
 
 tz = pytz.timezone("Asia/Jerusalem")
-
 tasks = []
 
 
@@ -94,7 +93,7 @@ def delete_task(task_id):
 def edit_task(task_id):
     if 0 <= task_id < len(tasks):
         task = tasks[task_id]
-        if task["status"] not in ["רץ"]:  # אפשר לערוך רק אם לא רץ
+        if task["status"] != "רץ":  # לא לערוך משימה פעילה
             new_name = request.form.get("name", task["name"])
             hours = int(request.form.get("hours", 0) or 0)
             minutes = int(request.form.get("minutes", 0) or 0)
@@ -140,15 +139,20 @@ def state():
         if task["end_time"]:
             overall_end = max(overall_end, task["end_time"])
 
+        if status == "רץ" and task["end_time"]:
+            remaining_str = format_td(task["end_time"] - current_time)
+        elif status in ["מושהה", "ממתין"]:
+            remaining_str = format_td(task["duration"])
+        else:
+            remaining_str = "00:00:00"
+
         data.append({
             "id": i,
             "name": task["name"],
             "status": task["status"],
             "initial_duration": format_td(task["original_duration"]),
             "end_time": task["end_time"].strftime("%H:%M:%S") if task["end_time"] else None,
-            "remaining": format_td(task["end_time"] - current_time) if status == "רץ" and task["end_time"] else (
-                format_td(task["duration"]) if status in ["מושהה", "ממתין"] else "00:00:00"
-            )
+            "remaining": remaining_str
         })
 
     return jsonify(tasks=data, overall_end=overall_end.strftime("%H:%M:%S"))
