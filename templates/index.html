@@ -4,69 +4,16 @@
     <meta charset="UTF-8">
     <title>טיימר משימות ⏱️</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            background: #f8f9fa;
-            margin: 0;
-            padding: 20px;
-        }
-        h1 {
-            color: #333;
-        }
-        form {
-            margin: 20px auto;
-            padding: 15px;
-            background: #fff;
-            border: 1px solid #ccc;
-            border-radius: 8px;
-            display: inline-block;
-        }
-        label {
-            margin: 0 5px;
-            font-weight: bold;
-        }
-        input {
-            width: 60px;
-            text-align: center;
-            margin: 5px;
-        }
-        button {
-            margin: 5px;
-            padding: 6px 12px;
-            border: none;
-            border-radius: 4px;
-            background: #007bff;
-            color: white;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #0056b3;
-        }
-        ul {
-            list-style: none;
-            padding: 0;
-            max-width: 600px;
-            margin: 20px auto;
-            text-align: right;
-        }
-        li {
-            background: #fff;
-            border: 1px solid #ddd;
-            margin: 8px 0;
-            padding: 12px;
-            border-radius: 6px;
-        }
-        .actions a, .actions form {
-            display: inline-block;
-            margin: 0 5px;
-        }
-        .actions button {
-            background: #6c757d;
-        }
-        .actions button:hover {
-            background: #5a6268;
-        }
+        body { font-family: Arial, sans-serif; background: #f8f9fa; text-align: center; padding: 20px; }
+        h1 { color: #333; }
+        form { margin: 15px auto; padding: 10px; background: #fff; border: 1px solid #ccc; border-radius: 8px; display: inline-block; }
+        label { margin: 0 5px; font-weight: bold; }
+        input { width: 60px; text-align: center; margin: 5px; }
+        button { margin: 5px; padding: 6px 12px; border: none; border-radius: 4px; background: #007bff; color: white; cursor: pointer; }
+        button:hover { background: #0056b3; }
+        ul { list-style: none; padding: 0; max-width: 700px; margin: 20px auto; text-align: right; }
+        li { background: #fff; border: 1px solid #ddd; margin: 8px 0; padding: 12px; border-radius: 6px; }
+        .actions a, .actions form { display: inline-block; margin: 0 5px; }
     </style>
 </head>
 <body>
@@ -75,49 +22,39 @@
     <!-- טופס הוספת משימה -->
     <form action="{{ url_for('add_task') }}" method="post">
         <input type="text" name="name" placeholder="שם משימה" required>
-
-        <label>שעות</label>
-        <input type="number" name="hours" min="0" value="0">
-
-        <label>דקות</label>
-        <input type="number" name="minutes" min="0" value="0">
-
-        <label>שניות</label>
-        <input type="number" name="seconds" min="0" value="0">
-
+        <label>שעות</label><input type="number" name="hours" min="0" value="0">
+        <label>דקות</label><input type="number" name="minutes" min="0" value="0">
+        <label>שניות</label><input type="number" name="seconds" min="0" value="0">
         <button type="submit">➕ הוסף משימה</button>
     </form>
 
-    <h2>רשימת משימות 📋</h2>
+    <h2>📋 רשימת משימות</h2>
     {% if tasks %}
         <ul>
             {% for task in tasks %}
                 <li>
-                    <strong>{{ task.name }}</strong>  
-                    | סטטוס: {{ task.status }}  
-                    | זמן נותר: {{ task.remaining }} שניות  
+                    <strong>{{ task.name }}</strong><br>
+                    סטטוס: {{ task.status }}<br>
+                    זמן נותר:
+                    <span data-endtime="{{ task.end_time.isoformat() if task.end_time else '' }}">
+                        {{ task.formatted_remaining() }}
+                    </span><br>
+                    שעת סיום: {% if task.end_time %}{{ task.end_time.strftime("%H:%M:%S") }}{% else %}—{% endif %}
 
                     <div class="actions">
-                        <a href="{{ url_for('start_task', task_id=task.id) }}"><button>▶️ התחל</button></a>
-                        <a href="{{ url_for('pause_task', task_id=task.id) }}"><button>⏸️ עצור</button></a>
-                        <a href="{{ url_for('reset_task', task_id=task.id) }}"><button>🔄 אפס</button></a>
-                        <a href="{{ url_for('finish_task', task_id=task.id) }}"><button>✅ סיים</button></a>
-                        <a href="{{ url_for('delete_task', task_id=task.id) }}"><button>🗑️ מחק</button></a>
+                        <a href="{{ url_for('start_task', task_id=task.id) }}"><button type="button">▶️ התחל</button></a>
+                        <a href="{{ url_for('pause_task', task_id=task.id) }}"><button type="button">⏸️ עצור</button></a>
+                        <a href="{{ url_for('reset_task', task_id=task.id) }}"><button type="button">🔄 אפס</button></a>
+                        <a href="{{ url_for('finish_task', task_id=task.id) }}"><button type="button">✅ סיים</button></a>
+                        <a href="{{ url_for('delete_task', task_id=task.id) }}"><button type="button">🗑️ מחק</button></a>
                     </div>
 
                     <!-- טופס עריכה -->
                     <form action="{{ url_for('edit_task', task_id=task.id) }}" method="post" style="margin-top:10px;">
                         <input type="text" name="name" value="{{ task.name }}" required>
-
-                        <label>שעות</label>
-                        <input type="number" name="hours" min="0" value="{{ task.duration // 3600 }}">
-
-                        <label>דקות</label>
-                        <input type="number" name="minutes" min="0" value="{{ (task.duration % 3600) // 60 }}">
-
-                        <label>שניות</label>
-                        <input type="number" name="seconds" min="0" value="{{ task.duration % 60 }}">
-
+                        <label>שעות</label><input type="number" name="hours" min="0" value="{{ task.duration // 3600 }}">
+                        <label>דקות</label><input type="number" name="minutes" min="0" value="{{ (task.duration % 3600) // 60 }}">
+                        <label>שניות</label><input type="number" name="seconds" min="0" value="{{ task.duration % 60 }}">
                         <button type="submit">✏️ ערוך</button>
                     </form>
                 </li>
@@ -126,5 +63,23 @@
     {% else %}
         <p>🚀 אין משימות כרגע</p>
     {% endif %}
+
+    <!-- ספירה לאחור חיה -->
+    <script>
+    function updateCountdowns() {
+        document.querySelectorAll("[data-endtime]").forEach(el => {
+            if (!el.dataset.endtime) return;
+            let end = new Date(el.dataset.endtime).getTime();
+            let now = new Date().getTime();
+            let diff = Math.max(0, Math.floor((end - now) / 1000));
+
+            let h = Math.floor(diff / 3600);
+            let m = Math.floor((diff % 3600) / 60);
+            let s = diff % 60;
+            el.textContent = `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`;
+        });
+    }
+    setInterval(updateCountdowns, 1000);
+    </script>
 </body>
 </html>
