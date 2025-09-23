@@ -1,175 +1,306 @@
-from flask import Flask, render_template, request, jsonify
-from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, make_response
+from datetime import datetime, timedelta, timezone
 import pytz
+import threading
 
 app = Flask(__name__)
-TZ = pytz.timezone("Asia/Jerusalem")
 
-def now():
-    return datetime.now(TZ)
+IL_TZ = pytz.timezone("Asia/Jerusalem")
 
-def hhmmss(td: timedelta) -> str:
-    total = max(int(td.total_seconds()), 0)
-    h, r = divmod(total, 3600)
-    m, s = divmod(r, 60)
-    return f"{h:02}:{m:02}:{s:02}"
+# ========= in-memory store =========
+tasks = []  # ordered list
+_next_id = 1
+lock = threading.Lock()
 
-tasks = []  # כל משימה: dict
 
-def can_start_index(idx: int) -> bool:
-    for j in range(idx):
-        if tasks[j]["status"] != "סיים":
-            return False
-    return True
+def now_utc():
+    return datetime.now(timezone.utc)
 
-@app.route("/")
-def index():
-    return render_template("index.html")
 
-@app.route("/add", methods=["POST"])
-def add_task():
-    name = request.form.get("name", "").strip() or "משימה חדשה"
-    hours = int(request.form.get("hours", 0) or 0)
-    minutes = int(request.form.get("minutes", 0) or 0)
-    seconds = int(request.form.get("seconds", 0) or 0)
+def format_il(dt_utc: datetime) -> str:
+    """Return IL local time string HH:MM:SS dd.mm.yyyy"""
+    if dt_utc is None:
+        return ""
+    # dt_utc is timezone-aware UTC
+    il = dt_utc.astimezone(IL_TZ)
+    return il.strftime("%H:%M:%S %d.%m.%Y")
 
-    duration = timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
-    task = {
-        "name": name,
-        "original_duration": duration,
-        "duration": duration,
-        "start_time": None,
-        "end_time": None,
-        "status": "ממתין",
-    }
-    tasks.append(task)
-    return jsonify(success=True)
+def remaining_seconds(task, ref: datetime) -> int:
+    """Server-authoritative remaining seconds for a task at time ref (UTC)."""
+    status = task["status"]
+    if status == "done":
+        return 0
+    if status == "running":
+        start_ts = task["start_ts"]
+        if start_ts is None:
+            return max(0, int(task["remaining_at_start"]))
+        elapsed = int((ref - start_ts).total_seconds())
+        return max(0, int(task["remaining_at_start"]) - elapsed)
+    # ready / paused
+    return max(0, int(task["remaining_at_start"]))
 
-@app.route("/start/<int:task_id>", methods=["POST"])
-def start_task(task_id):
-    if 0 <= task_id < len(tasks):
-        t = tasks[task_id]
-        if t["status"] == "מושהה":
-            t["start_time"] = now()
-            t["end_time"] = t["start_time"] + t["duration"]
-            t["status"] = "רץ"
-            return jsonify(success=True)
-        if t["status"] == "ממתין" and can_start_index(task_id):
-            t["start_time"] = now()
-            t["end_time"] = t["start_time"] + t["duration"]
-            t["status"] = "רץ"
-            return jsonify(success=True)
-    return jsonify(success=False)
 
-@app.route("/pause/<int:task_id>", methods=["POST"])
-def pause_task(task_id):
-    if 0 <= task_id < len(tasks):
-        t = tasks[task_id]
-        if t["status"] == "רץ":
-            rem = t["end_time"] - now()
-            t["duration"] = max(rem, timedelta(seconds=0))
-            t["status"] = "מושהה"
-            t["start_time"] = None
-            t["end_time"] = None
-            return jsonify(success=True)
-    return jsonify(success=False)
+def cascade_projection(ref: datetime):
+    """
+    Build a projection of:
+     - per task: predicted_end_utc, remaining_now
+     - end_all_utc
+    Also performs auto-advance: if running finished -> mark done and start next.
+    """
+    changed = False
 
-@app.route("/reset/<int:task_id>", methods=["POST"])
-def reset_task(task_id):
-    if 0 <= task_id < len(tasks):
-        t = tasks[task_id]
-        t["duration"] = t["original_duration"]
-        t["start_time"] = now()
-        t["end_time"] = t["start_time"] + t["duration"]
-        t["status"] = "רץ"
-        return jsonify(success=True)
-    return jsonify(success=False)
-
-@app.route("/delete/<int:task_id>", methods=["POST"])
-def delete_task(task_id):
-    if 0 <= task_id < len(tasks):
-        tasks.pop(task_id)
-        return jsonify(success=True)
-    return jsonify(success=False)
-
-@app.route("/edit/<int:task_id>", methods=["POST"])
-def edit_task(task_id):
-    if 0 <= task_id < len(tasks):
-        t = tasks[task_id]
-        if t["status"] == "רץ":
-            return jsonify(success=False)
-
-        name = request.form.get("name", None)
-        if name is not None and name.strip() != "":
-            t["name"] = name.strip()
-
-        if any(k in request.form for k in ("hours", "minutes", "seconds")):
-            hours = int(request.form.get("hours", 0) or 0)
-            minutes = int(request.form.get("minutes", 0) or 0)
-            seconds = int(request.form.get("seconds", 0) or 0)
-            new_dur = timedelta(hours=hours, minutes=minutes, seconds=seconds)
-            t["original_duration"] = new_dur
-            t["duration"] = new_dur
-            t["start_time"] = None
-            t["end_time"] = None
-            t["status"] = "ממתין"
-
-        return jsonify(success=True)
-    return jsonify(success=False)
-
-@app.route("/state")
-def state():
-    cur = now()
-    overall_end = cur
-    result = []
-
-    for i, t in enumerate(tasks):
-        if t["status"] == "רץ" and t["end_time"]:
-            remaining = t["end_time"] - cur
-            if remaining.total_seconds() <= 0:
-                t["status"] = "סיים"
-                t["start_time"] = None
-                t["end_time"] = None
-                t["duration"] = timedelta(seconds=0)
-                if i + 1 < len(tasks):
-                    nxt = tasks[i + 1]
-                    if nxt["status"] == "ממתין":
-                        nxt["start_time"] = now()
-                        nxt["end_time"] = nxt["start_time"] + nxt["duration"]
-                        nxt["status"] = "רץ"
-
-        if t["end_time"] is not None and t["end_time"] > overall_end:
-            overall_end = t["end_time"]
-
-        if t["status"] == "רץ" and t["end_time"]:
-            remaining_str = hhmmss(t["end_time"] - cur)
-        elif t["status"] in ("מושהה", "ממתין"):
-            remaining_str = hhmmss(t["duration"])
+    # ----- auto-advance if a running task finished -----
+    # We may loop in case multiple very short tasks passed while app slept
+    while True:
+        running_idx = next((i for i, t in enumerate(tasks) if t["status"] == "running"), None)
+        if running_idx is None:
+            break
+        rem = remaining_seconds(tasks[running_idx], ref)
+        if rem > 0:
+            break
+        # mark running as done
+        tasks[running_idx]["status"] = "done"
+        tasks[running_idx]["finished_ts"] = ref
+        tasks[running_idx]["start_ts"] = None
+        tasks[running_idx]["remaining_at_start"] = 0
+        changed = True
+        # start next not-done (ready/paused)
+        next_idx = next((i for i, t in enumerate(tasks[running_idx + 1:], start=running_idx + 1)
+                         if t["status"] != "done"), None)
+        if next_idx is not None:
+            t = tasks[next_idx]
+            t["status"] = "running"
+            t["start_ts"] = ref
+            # remaining_at_start already holds what’s left (for ready it's original; for paused it's saved remainder)
+            changed = True
         else:
-            remaining_str = "00:00:00"
+            break
 
-        dur_for_edit = t["duration"] if t["status"] in ("מושהה", "ממתין") else t["original_duration"]
-        total = int(dur_for_edit.total_seconds())
-        eh, r = divmod(total, 3600)
-        em, es = divmod(r, 60)
+    # ----- build projection -----
+    projection = []
+    cursor = ref
+    # If there is a running task, the cursor after it will be now + remaining_running
+    for idx, t in enumerate(tasks):
+        rem_now = remaining_seconds(t, ref)
+        if t["status"] == "running":
+            predicted_end = ref + timedelta(seconds=rem_now)
+            cursor = predicted_end
+        elif t["status"] in ("ready", "paused"):
+            predicted_end = cursor + timedelta(seconds=rem_now)
+            cursor = predicted_end
+        else:  # done
+            predicted_end = t.get("finished_ts") or ref
 
-        result.append({
-            "id": i,
-            "name": t["name"],
-            "status": t["status"],
-            "initial": hhmmss(t["original_duration"]),
-            "end_time": t["end_time"].strftime("%H:%M:%S") if t["end_time"] else "",
-            "remaining": remaining_str,
-            "editable_hours": eh,
-            "editable_minutes": em,
-            "editable_seconds": es,
+        projection.append({
+            "id": t["id"],
+            "remaining_now": rem_now,
+            "predicted_end_utc": predicted_end
         })
 
-    return jsonify(
-        tasks=result,
-        overall_end=overall_end.strftime("%H:%M:%S")
-    )
+    end_all_utc = cursor
+
+    return projection, end_all_utc, changed
+
+
+def serialize_state():
+    ref = now_utc()
+    proj, end_all_utc, changed = cascade_projection(ref)
+
+    state_tasks = []
+    for base, p in zip(tasks, proj):
+        state_tasks.append({
+            "id": base["id"],
+            "name": base["name"],
+            "status": base["status"],
+            "original_seconds": base["original_seconds"],
+            "initial_str": seconds_to_hms(base["original_seconds"]),
+            "remaining_seconds": p["remaining_now"],
+            "remaining_str": seconds_to_hms(p["remaining_now"]),
+            "predicted_end": format_il(p["predicted_end_utc"]),
+        })
+
+    return {
+        "now_il": format_il(ref),
+        "end_all": format_il(end_all_utc),
+        "tasks": state_tasks
+    }
+
+
+def seconds_to_hms(total: int) -> str:
+    total = max(0, int(total))
+    h = total // 3600
+    m = (total % 3600) // 60
+    s = total % 60
+    return f"{h:02d}:{m:02d}:{s:02d}"
+
+
+def normalize_duration(h, m, s) -> int:
+    try:
+        h = int(h or 0)
+        m = int(m or 0)
+        s = int(s or 0)
+    except Exception:
+        return 0
+    if h < 0 or m < 0 or s < 0:
+        return 0
+    return h * 3600 + m * 60 + s
+
+
+@app.get("/")
+def index():
+    # serve the static index.html that lives next to Main.py
+    with open("index.html", "r", encoding="utf-8") as f:
+        html = f.read()
+    return make_response(html)
+
+
+@app.get("/state")
+def state():
+    with lock:
+        data = serialize_state()
+    return jsonify(data)
+
+
+@app.post("/tasks")
+def add_task():
+    body = request.get_json(force=True, silent=True) or {}
+    name = (body.get("name") or "").strip() or f"משימה {len(tasks) + 1}"
+    total = normalize_duration(body.get("h"), body.get("m"), body.get("s"))
+
+    with lock:
+        global _next_id
+        t = {
+            "id": _next_id,
+            "name": name,
+            "status": "ready",              # ready | running | paused | done
+            "original_seconds": total,      # the base original
+            "remaining_at_start": total,    # when starting/running, what is left at start_ts
+            "start_ts": None,               # UTC aware
+            "finished_ts": None,
+        }
+        _next_id += 1
+        tasks.append(t)
+        data = serialize_state()
+    return jsonify(data)
+
+
+@app.post("/start/<int:tid>")
+def start_task(tid):
+    ref = now_utc()
+    with lock:
+        # pause currently running (if any)
+        run = next((t for t in tasks if t["status"] == "running"), None)
+        if run and run["id"] != tid:
+            # compute remainder and pause
+            rem = remaining_seconds(run, ref)
+            run["status"] = "paused"
+            run["start_ts"] = None
+            run["remaining_at_start"] = rem
+
+        # start this one (only if not done)
+        t = next((t for t in tasks if t["id"] == tid), None)
+        if not t or t["status"] == "done":
+            data = serialize_state()
+            return jsonify(data)
+
+        # compute fresh remainder for safety
+        rem = remaining_seconds(t, ref)
+        t["status"] = "running"
+        t["start_ts"] = ref
+        t["remaining_at_start"] = rem
+        t["finished_ts"] = None
+
+        data = serialize_state()
+    return jsonify(data)
+
+
+@app.post("/pause/<int:tid>")
+def pause_task(tid):
+    ref = now_utc()
+    with lock:
+        t = next((t for t in tasks if t["id"] == tid), None)
+        if t and t["status"] == "running":
+            rem = remaining_seconds(t, ref)
+            t["status"] = "paused"
+            t["start_ts"] = None
+            t["remaining_at_start"] = rem
+        data = serialize_state()
+    return jsonify(data)
+
+
+@app.post("/reset/<int:tid>")
+def reset_task(tid):
+    """Reset to original time AND start immediately from the beginning."""
+    ref = now_utc()
+    with lock:
+        # pause any running task (except the target)
+        run = next((t for t in tasks if t["status"] == "running" and t["id"] != tid), None)
+        if run:
+            rem = remaining_seconds(run, ref)
+            run["status"] = "paused"
+            run["start_ts"] = None
+            run["remaining_at_start"] = rem
+
+        t = next((t for t in tasks if t["id"] == tid), None)
+        if t:
+            t["status"] = "running"
+            t["start_ts"] = ref
+            t["remaining_at_start"] = t["original_seconds"]
+            t["finished_ts"] = None
+
+        data = serialize_state()
+    return jsonify(data)
+
+
+@app.post("/update/<int:tid>")
+def update_task():
+    """
+    Allowed only when NOT running.
+    Accepts: name (optional), h/m/s (optional)
+    If duration is changed:
+       - ready/paused -> set remaining_at_start = new_total
+       - done -> becomes ready with remaining_at_start = new_total and finished_ts cleared
+    """
+    body = request.get_json(force=True, silent=True) or {}
+    name = body.get("name")
+    h, m, s = body.get("h"), body.get("m"), body.get("s")
+    new_total = normalize_duration(h, m, s) if (h is not None or m is not None or s is not None) else None
+
+    with lock:
+        t = next((t for t in tasks if t["id"] == tid), None)
+        if t and t["status"] != "running":
+            if isinstance(name, str):
+                t["name"] = name.strip()
+
+            if new_total is not None:
+                t["original_seconds"] = new_total
+                if t["status"] in ("ready", "paused"):
+                    t["remaining_at_start"] = new_total
+                elif t["status"] == "done":
+                    t["status"] = "ready"
+                    t["remaining_at_start"] = new_total
+                    t["finished_ts"] = None
+
+        data = serialize_state()
+    return jsonify(data)
+
+
+@app.post("/delete/<int:tid>")
+def delete_task(tid):
+    with lock:
+        idx = next((i for i, t in enumerate(tasks) if t["id"] == tid), None)
+        if idx is not None:
+            del tasks[idx]
+        data = serialize_state()
+    return jsonify(data)
+
+
+# Optional: simple health endpoint
+@app.get("/ping")
+def ping():
+    return "ok", 200
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=10000, debug=False)
