@@ -31,13 +31,11 @@ class Task(db.Model):
             "end_time": self.end_time.astimezone(ZoneInfo("Asia/Jerusalem")).strftime("%H:%M:%S") if self.end_time else None,
         }
 
-# ====== יצירת טבלה ======
 with app.app_context():
     db.create_all()
 
-# ====== פונקציות עזר ======
+# ====== עזר ======
 def recalc_end_times():
-    """מחשב מחדש את זמני הסיום לכל השרשרת (לפי סדר המשימות)"""
     now = datetime.now(ZoneInfo("Asia/Jerusalem"))
     for t in Task.query.order_by(Task.order_index).all():
         if t.status in ("pending", "paused"):
@@ -45,12 +43,9 @@ def recalc_end_times():
             t.end_time = now
         elif t.status == "running" and t.end_time:
             now = t.end_time
-        elif t.status == "done":
-            pass
     db.session.commit()
 
 def start_next_task():
-    """מתחיל אוטומטית את המשימה הבאה אחרי שסיימנו קודמת"""
     next_task = Task.query.filter(Task.status == "pending").order_by(Task.order_index).first()
     if next_task:
         next_task.status = "running"
@@ -78,13 +73,10 @@ def create_task():
     data = request.get_json(silent=True) or {}
     name = (data.get("name") or "").strip() or "משימה"
     try:
-        if "duration_seconds" in data:
-            duration_seconds = int(data.get("duration_seconds") or 0)
-        else:
-            h = int(data.get("hours") or 0)
-            m = int(data.get("minutes") or 0)
-            s = int(data.get("seconds") or 0)
-            duration_seconds = h * 3600 + m * 60 + s
+        h = int(data.get("hours") or 0)
+        m = int(data.get("minutes") or 0)
+        s = int(data.get("seconds") or 0)
+        duration_seconds = h * 3600 + m * 60 + s
     except (TypeError, ValueError):
         return jsonify({"error": "קלט זמן לא תקין"}), 400
 
@@ -110,12 +102,10 @@ def start_task(task_id):
     if not task:
         return jsonify({"error": "Task not found"}), 404
 
-    # בדיקה – רק משימה ראשונה או paused
     first = Task.query.order_by(Task.order_index).first()
     if task != first and task.status != "paused":
         return jsonify({"error": "אפשר להתחיל רק משימה ראשונה או מושהית"}), 400
 
-    # לא לאפשר שתי משימות רצות במקביל
     if Task.query.filter_by(status="running").first() and task.status != "paused":
         return jsonify({"error": "כבר יש משימה רצה"}), 400
 
@@ -155,6 +145,19 @@ def finish_task(task_id):
     task.end_time = datetime.now(ZoneInfo("Asia/Jerusalem"))
     db.session.commit()
     start_next_task()
+    return jsonify(task.as_dict())
+
+@app.route("/reset/<int:task_id>", methods=["POST"])
+def reset_task(task_id):
+    task = Task.query.get(task_id)
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
+    task.remaining_seconds = task.duration_seconds
+    task.status = "pending"
+    task.start_time = None
+    task.end_time = None
+    db.session.commit()
+    recalc_end_times()
     return jsonify(task.as_dict())
 
 @app.route("/delete/<int:task_id>", methods=["POST"])
