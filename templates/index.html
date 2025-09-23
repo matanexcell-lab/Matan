@@ -3,27 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <title>⏱ טיימר משימות</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            text-align: center;
-            direction: rtl;
-            background-color: #f8f9fa;
-        }
-        h1 { color: #333; }
-        form { margin: 20px 0; }
-        input, button { padding: 6px; margin: 3px; }
-        table {
-            margin: 0 auto;
-            border-collapse: collapse;
-            width: 85%;
-            background: white;
-            box-shadow: 0 0 5px rgba(0,0,0,0.1);
-        }
-        th, td { border: 1px solid #ccc; padding: 8px; }
-        th { background: #e9ecef; }
-        .actions form { display: inline; }
-    </style>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
     <h1>⏱ טיימר משימות</h1>
@@ -52,45 +32,39 @@
             <td>{{ task.status }}</td>
             <td>
                 <span class="timer"
-                      data-task-id="{{ task.id }}"
-                      data-remaining="{{ task.remaining_time() if task.status == 'פעילה' else task.duration }}">
-                    {% if task.status == "פעילה" %}
-                        {{ task.remaining_time() }}
-                    {% else %}
-                        {{ task.duration }}
-                    {% endif %}
-                </span> שניות
+                      data-remaining="{{ task.remaining_seconds() }}">
+                    {{ task.remaining_time() }}
+                </span>
             </td>
             <td class="actions">
                 {% if task.status != "פעילה" %}
                 <form action="{{ url_for('start_task', task_id=task.id) }}" method="post">
-                    <button type="submit">▶️ התחל</button>
+                    <button type="submit" class="start-btn">▶️ התחל</button>
                 </form>
                 {% endif %}
                 {% if task.status == "פעילה" %}
                 <form action="{{ url_for('stop_task', task_id=task.id) }}" method="post">
-                    <button type="submit">⏸ עצור</button>
+                    <button type="submit" class="stop-btn">⏸ עצור</button>
                 </form>
                 {% endif %}
                 <form action="{{ url_for('done_task', task_id=task.id) }}" method="post">
-                    <button type="submit">✅ סיים</button>
+                    <button type="submit" class="done-btn">✅ סיים</button>
                 </form>
-                <a href="{{ url_for('edit_task', task_id=task.id) }}">✏️ ערוך</a>
+                <a href="{{ url_for('index', edit=task.id) }}">✏️ ערוך</a>
                 <form action="{{ url_for('delete_task', task_id=task.id) }}" method="post">
-                    <button type="submit">🗑 מחק</button>
+                    <button type="submit" class="delete-btn">🗑 מחק</button>
                 </form>
             </td>
         </tr>
 
-        <!-- טופס עריכה -->
         {% if edit_task and edit_task.id == task.id %}
         <tr>
             <td colspan="4">
                 <form action="{{ url_for('update_task', task_id=task.id) }}" method="post">
                     <input type="text" name="name" value="{{ edit_task.name }}" required>
-                    <input type="number" name="hours" placeholder="שעות" min="0">
-                    <input type="number" name="minutes" placeholder="דקות" min="0">
-                    <input type="number" name="seconds" placeholder="שניות" min="0">
+                    <input type="number" name="hours" value="{{ edit_task.duration // 3600 if edit_task.duration // 3600 > 0 else '' }}" placeholder="שעות" min="0">
+                    <input type="number" name="minutes" value="{{ (edit_task.duration % 3600) // 60 if (edit_task.duration % 3600) // 60 > 0 else '' }}" placeholder="דקות" min="0">
+                    <input type="number" name="seconds" value="{{ edit_task.duration % 60 if edit_task.duration % 60 > 0 else '' }}" placeholder="שניות" min="0">
                     <button type="submit">💾 עדכן</button>
                 </form>
             </td>
@@ -104,16 +78,24 @@
 
     <!-- JS לספירה לאחור -->
     <script>
+        function formatTime(sec) {
+            let h = Math.floor(sec / 3600);
+            let m = Math.floor((sec % 3600) / 60);
+            let s = sec % 60;
+            return [h, m, s].map(v => String(v).padStart(2, "0")).join(":");
+        }
+
         function startCountdown(element) {
             let remaining = parseInt(element.dataset.remaining);
             if (isNaN(remaining) || remaining <= 0) return;
 
             function update() {
-                if (remaining > 0) {
+                if (remaining >= 0) {
+                    element.textContent = formatTime(remaining);
                     remaining--;
-                    element.textContent = remaining;
                 }
             }
+            update();
             setInterval(update, 1000);
         }
 
@@ -122,6 +104,9 @@
                 const statusCell = el.closest("tr").children[1];
                 if (statusCell.textContent.trim() === "פעילה") {
                     startCountdown(el);
+                } else {
+                    let val = parseInt(el.dataset.remaining);
+                    if (!isNaN(val)) el.textContent = formatTime(val);
                 }
             });
         });
