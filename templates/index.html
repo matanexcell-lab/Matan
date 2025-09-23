@@ -5,39 +5,14 @@
     <title>טיימר משימות</title>
     <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            direction: rtl;
-            margin: 20px;
-            text-align: center;
-        }
-        table {
-            border-collapse: collapse;
-            width: 95%;
-            margin: auto;
-        }
-        th, td {
-            border: 1px solid #333;
-            padding: 8px;
-        }
-        th {
-            background: #eee;
-        }
-        button {
-            margin: 2px;
-        }
-        .input-row {
-            margin: 20px;
-        }
-        .input-row input {
-            width: 60px;
-            text-align: center;
-        }
-        #overallEnd {
-            margin: 20px;
-            font-weight: bold;
-            font-size: 18px;
-        }
+        body { font-family: Arial, sans-serif; direction: rtl; text-align: center; margin: 20px; }
+        table { border-collapse: collapse; width: 95%; margin: auto; }
+        th, td { border: 1px solid #333; padding: 6px; }
+        th { background: #eee; }
+        button { margin: 2px; }
+        .input-row { margin: 20px; }
+        .input-row input { width: 60px; text-align: center; }
+        #overallEnd { margin: 20px; font-weight: bold; font-size: 18px; }
     </style>
 </head>
 <body>
@@ -45,14 +20,10 @@
 
     <div class="input-row">
         <form id="taskForm">
-            שם משימה:
-            <input type="text" name="name" value="משימה חדשה">
-            שעות:
-            <input type="number" name="hours" min="0" value="0">
-            דקות:
-            <input type="number" name="minutes" min="0" value="0">
-            שניות:
-            <input type="number" name="seconds" min="0" value="0">
+            שם משימה: <input type="text" name="name" value="משימה חדשה">
+            שעות: <input type="number" name="hours" min="0" value="0">
+            דקות: <input type="number" name="minutes" min="0" value="0">
+            שניות: <input type="number" name="seconds" min="0" value="0">
             <button type="submit">➕ הוסף</button>
         </form>
     </div>
@@ -64,8 +35,9 @@
             <tr>
                 <th>שם</th>
                 <th>סטטוס</th>
+                <th>זמן התחלתי</th>
                 <th>שעת סיום</th>
-                <th>זמן נותר (שניות)</th>
+                <th>נותר</th>
                 <th>פעולות</th>
             </tr>
         </thead>
@@ -76,13 +48,17 @@
         function loadState() {
             $.get("/state", function(resp) {
                 $("#taskTable").empty();
-
                 resp.tasks.forEach(function(task) {
                     let row = "<tr>";
-                    row += "<td contenteditable='true' onblur='editTask(" + task.id + ", this)'>" + task.name + "</td>";
+                    if (task.status === "רץ") {
+                        row += "<td>" + task.name + "</td>";
+                    } else {
+                        row += "<td><input type='text' value='" + task.name + "' onchange='editTask(" + task.id + ", this)'></td>";
+                    }
                     row += "<td>" + task.status + "</td>";
+                    row += "<td>" + task.initial_duration + "</td>";
                     row += "<td>" + (task.end_time || "") + "</td>";
-                    row += "<td>" + (task.remaining !== null ? task.remaining : "") + "</td>";
+                    row += "<td>" + task.remaining + "</td>";
                     row += "<td>";
                     row += "<button onclick='startTask(" + task.id + ")'>▶️ התחל</button>";
                     row += "<button onclick='pauseTask(" + task.id + ")'>⏸️ השהה</button>";
@@ -92,7 +68,6 @@
                     row += "</tr>";
                     $("#taskTable").append(row);
                 });
-
                 $("#overallEnd").text("שעת סיום כוללת: " + resp.overall_end);
             });
         }
@@ -103,7 +78,7 @@
         function deleteTask(id) { $.get("/delete/" + id, loadState); }
 
         function editTask(id, elem) {
-            const name = $(elem).text();
+            const name = $(elem).val();
             $.post("/edit/" + id, { name: name, hours: 0, minutes: 0, seconds: 0 }, loadState);
         }
 
@@ -114,7 +89,6 @@
             });
         });
 
-        // טיימר אוטומטי לרענון
         setInterval(loadState, 1000);
         loadState();
     </script>
