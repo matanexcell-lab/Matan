@@ -50,6 +50,7 @@
                         <a href="{{ url_for('index', edit=task.id) }}">✏ ערוך</a>
                     {% endif %}
                     <a href="/finish/{{ task.id }}">✔ סיים</a>
+                    <a href="/delete/{{ task.id }}" onclick="return confirm('למחוק משימה?')">🗑 מחק</a>
                 </div>
             {% endif %}
         </li>
