@@ -1,209 +1,257 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
-  <title>טיימר משימות ⏱️</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>טיימר משימות ⏱️</title>
+  <link rel="stylesheet" href="/static/style.css" />
   <style>
-    body { font-family: system-ui, Arial, sans-serif; background:#f6f7fb; margin:0; padding:24px; }
-    h1 { margin: 0 0 16px; }
-    .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
-    input[type=number] { width:6rem; padding:8px; }
-    input[type=text] { width:14rem; padding:8px; }
-    button { padding:8px 12px; border:0; border-radius:8px; cursor:pointer; background:#2563eb; color:#fff; }
-    button.secondary { background:#e5e7eb; color:#111; }
-    button.warn { background:#f59e0b; }
-    button.danger { background:#ef4444; }
-    button:disabled { opacity:.55; cursor:not-allowed; }
-    table { width:100%; border-collapse:separate; border-spacing:0; background:#fff; border-radius:12px; overflow:hidden; }
-    th,td { padding:10px 12px; border-bottom:1px solid #eee; text-align:center; }
-    th { background:#f0f2f8; font-weight:600; }
-    tr:last-child td { border-bottom:0; }
-    .muted { color:#6b7280; font-size:.9em; }
-    .status { padding:2px 8px; border-radius:999px; font-size:.85em; }
-    .active { background:#dcfce7; color:#166534; }
-    .paused { background:#fde68a; color:#92400e; }
-    .pending { background:#e5e7eb; color:#111827; }
-    .done { background:#e5e7eb; color:#6b7280; }
-    .row-actions { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
-    .inline-edit { display:flex; gap:6px; justify-content:center; align-items:center; }
-    .small { width:4.5rem; }
-    .top-info { margin:10px 0 18px; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; background:#fafafa; color:#222; }
+    .wrap { max-width:980px; margin:24px auto; padding:0 12px; }
+    h1 { font-size:1.6rem; margin:0 0 16px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    input[type="number"], input[type="text"] { padding:8px 10px; border:1px solid #ddd; border-radius:8px; width:100%; box-sizing:border-box; }
+    .num { width:86px; text-align:center; }
+    .add { background:#0d6efd; color:#fff; border:none; border-radius:8px; padding:8px 14px; cursor:pointer; }
+    .add:disabled { opacity:.6; cursor:not-allowed; }
+    table { width:100%; border-collapse:collapse; margin-top:18px; background:#fff; border-radius:12px; overflow:hidden; box-shadow:0 1px 6px rgba(0,0,0,.06); }
+    th, td { padding:10px 8px; border-bottom:1px solid #eee; }
+    th { background:#f2f4f8; font-weight:600; }
+    .tag { padding:2px 8px; border-radius:999px; font-size:.85rem; }
+    .waiting { background:#e7f1ff; color:#0d6efd; }
+    .running { background:#def7e6; color:#137333; }
+    .paused  { background:#fff3cd; color:#7a5c00; }
+    .done    { background:#e7e7e7; color:#444; }
+    .btn { padding:6px 10px; border-radius:8px; border:1px solid #ddd; background:#fff; cursor:pointer; }
+    .btn + .btn { margin-right:6px; }
+    .danger { border-color:#e74c3c; color:#e74c3c; }
+    .ok { border-color:#0d6efd; color:#0d6efd; }
+    .muted { color:#777; }
+    .total { margin-top:10px; font-weight:600; }
+    .editbox { display:flex; gap:6px; align-items:center; }
   </style>
 </head>
 <body>
+<div class="wrap">
   <h1>טיימר משימות ⏱️</h1>
 
-  <div class="bar">
-    <input id="task-name" type="text" placeholder="שם משימה" />
-    <input id="h" type="number" min="0" value="0" placeholder="שעות" class="small" />
-    <input id="m" type="number" min="0" value="0" placeholder="דקות" class="small" />
-    <input id="s" type="number" min="0" value="0" placeholder="שניות" class="small" />
-    <button onclick="addTask()">➕ הוסף משימה</button>
+  <!-- הוספת משימה -->
+  <div class="row">
+    <input id="taskName" type="text" placeholder="שם משימה" />
+    <input id="hours" class="num" type="number" min="0" placeholder="שעות" />
+    <input id="minutes" class="num" type="number" min="0" max="59" placeholder="דקות" />
+    <input id="seconds" class="num" type="number" min="0" max="59" placeholder="שניות" />
+    <button id="addBtn" class="add">הוסף משימה ➕</button>
   </div>
 
-  <div id="all-end" class="top-info muted">—</div>
+  <div class="total" id="totalFinish"></div>
 
-  <table>
+  <table id="tbl">
     <thead>
       <tr>
         <th>שם</th>
         <th>מצב</th>
-        <th>משך</th>
         <th>נותר</th>
-        <th>שעת סיום צפויה</th>
-        <th>עריכה</th>
+        <th>שעת סיום משימה</th>
         <th>פעולות</th>
       </tr>
     </thead>
-    <tbody id="rows"></tbody>
+    <tbody id="tbody">
+      <!-- ימולא ב-JS -->
+    </tbody>
   </table>
+</div>
 
-  <script>
-    const tz = 'Asia/Jerusalem';
+<script>
+  const tbody = document.getElementById('tbody');
+  const totalFinish = document.getElementById('totalFinish');
+  const addBtn = document.getElementById('addBtn');
 
-    const fmtHMS = (sec) => {
-      sec = Math.max(0, Math.floor(sec||0));
-      const h = Math.floor(sec/3600);
-      const m = Math.floor((sec%3600)/60);
-      const s = sec%60;
-      const pad = (n)=> String(n).padStart(2,'0');
-      return `${pad(h)}:${pad(m)}:${pad(s)}`;
-    };
-    const fmtDT = (iso) => {
-      if(!iso) return '—';
-      const d = new Date(iso);
-      return d.toLocaleString('he-IL', { timeZone: tz, hour12:false });
-    };
+  let lastSync = Date.now();
+  let snapshot = []; // מהשרת
+  let nowUtcStr = null;
 
-    async function addTask() {
-      const body = new URLSearchParams({
-        name: document.getElementById('task-name').value,
-        hours: document.getElementById('h').value,
-        minutes: document.getElementById('m').value,
-        seconds: document.getElementById('s').value,
-      });
-      const r = await fetch('/add', { method:'POST', body });
-      if (!r.ok) { alert('שגיאה בהוספה'); return; }
-      document.getElementById('task-name').value='';
-      document.getElementById('h').value=0;
-      document.getElementById('m').value=0;
-      document.getElementById('s').value=0;
-      await refresh();
+  function fmtClock(sec) {
+    sec = Math.max(0, Math.floor(sec));
+    const h = Math.floor(sec/3600);
+    const m = Math.floor((sec%3600)/60);
+    const s = Math.floor(sec%60);
+    return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  }
+
+  function statusTag(st) {
+    const map = {waiting:'waiting', running:'running', paused:'paused', done:'done'};
+    return `<span class="tag ${map[st]||'waiting'}">${st==='waiting'?'ממתין':st==='running'?'פעילה':st==='paused'?'מושהית':'הושלמה'}</span>`;
+  }
+
+  function secsNowFor(task) {
+    // זמן נותר לפי הסנאפשוט והזמן שעבר מאז הסנכרון
+    let rem = task.remaining_now;
+    if (task.status === 'running') {
+      const delta = Math.floor((Date.now() - lastSync) / 1000);
+      rem = Math.max(rem - delta, 0);
     }
+    return rem;
+  }
 
-    async function startTask(id){
-      const r = await fetch(`/start/${id}`, {method:'POST'});
-      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
-      await refresh();
-    }
-    async function pauseTask(id){
-      const r = await fetch(`/pause/${id}`, {method:'POST'});
-      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
-      await refresh();
-    }
-    async function resetTask(id){
-      const r = await fetch(`/reset/${id}`, {method:'POST'});
-      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
-      await refresh();
-    }
-    async function deleteTask(id){
-      if(!confirm('למחוק את המשימה?')) return;
-      const r = await fetch(`/delete/${id}`, {method:'DELETE'});
-      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
-      await refresh();
-    }
+  function render() {
+    tbody.innerHTML = '';
+    snapshot.forEach(t => {
+      const tr = document.createElement('tr');
 
-    async function saveEdit(id){
-      const name = document.querySelector(`#row-${id} .edit-name`).value;
-      const hh = document.querySelector(`#row-${id} .edit-h`).value;
-      const mm = document.querySelector(`#row-${id} .edit-m`).value;
-      const ss = document.querySelector(`#row-${id} .edit-s`).value;
-      const r = await fetch(`/edit/${id}`, {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ name, hours:hh, minutes:mm, seconds:ss })
-      });
-      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
-      await refresh();
-    }
-
-    function render(state){
-      const tbody = document.getElementById('rows');
-      tbody.innerHTML = '';
-      state.tasks.forEach(t=>{
-        const tr = document.createElement('tr');
-        tr.id = `row-${t.id}`;
-
-        const statusClass = t.status === 'active' ? 'active'
-                            : t.status === 'paused' ? 'paused'
-                            : t.status === 'pending' ? 'pending' : 'done';
-
-        // שם
-        const tdName = document.createElement('td');
-        tdName.innerHTML = `<input class="edit-name" type="text" value="${t.name.replaceAll('"','&quot;')}" ${t.status==='active'?'disabled':''} />`;
-        tr.appendChild(tdName);
-
-        // מצב
-        const tdSt = document.createElement('td');
-        const label = t.status==='active'?'פעילה':t.status==='paused'?'מושהית':t.status==='pending'?'ממתינה':'הסתיימה';
-        tdSt.innerHTML = `<span class="status ${statusClass}">${label}</span>`;
-        tr.appendChild(tdSt);
-
-        // משך
-        const tdDur = document.createElement('td');
-        tdDur.innerHTML = `
-          <div class="inline-edit">
-            <input class="edit-h small" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${t.status==='active'?'disabled':''} />
-            <input class="edit-m small" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${t.status==='active'?'disabled':''} />
-            <input class="edit-s small" type="number" min="0" value="${t.duration%60}" ${t.status==='active'?'disabled':''} />
+      // שם + מצב עריכה inline אם אינו רץ
+      const nameTd = document.createElement('td');
+      if (t.status === 'running') {
+        nameTd.textContent = t.name;
+      } else {
+        nameTd.innerHTML =
+          `<div class="editbox">
+              <input data-kind="name" data-id="${t.id}" type="text" value="${t.name.replace(/"/g,'&quot;')}" />
+              <input data-kind="h" data-id="${t.id}" class="num" type="number" min="0" placeholder="שעות" />
+              <input data-kind="m" data-id="${t.id}" class="num" type="number" min="0" max="59" placeholder="דקות" />
+              <input data-kind="s" data-id="${t.id}" class="num" type="number" min="0" max="59" placeholder="שניות" />
+              <button class="btn ok" onclick="saveEdit(${t.id})">שמור</button>
           </div>`;
-        tr.appendChild(tdDur);
+      }
+      tr.appendChild(nameTd);
 
-        // נותר
-        const tdRem = document.createElement('td');
-        tdRem.className = 'rem';
-        tdRem.textContent = fmtHMS(t.remaining);
-        tr.appendChild(tdRem);
+      // מצב
+      const stTd = document.createElement('td');
+      stTd.innerHTML = statusTag(t.status);
+      tr.appendChild(stTd);
 
-        // סיום צפוי
-        const tdEnd = document.createElement('td');
-        tdEnd.className = 'pred';
-        tdEnd.textContent = fmtDT(t.predicted_end);
-        tr.appendChild(tdEnd);
+      // נותר
+      const leftTd = document.createElement('td');
+      leftTd.id = `left-${t.id}`;
+      leftTd.textContent = fmtClock(secsNowFor(t));
+      tr.appendChild(leftTd);
 
-        // כפתור שמירת עריכה (כשלא פעילה)
-        const tdEdit = document.createElement('td');
-        tdEdit.innerHTML = `<button class="secondary" onclick="saveEdit(${t.id})" ${t.status==='active'?'disabled':''}>שמור</button>`;
-        tr.appendChild(tdEdit);
+      // סיום משימה
+      const endTd = document.createElement('td');
+      endTd.id = `end-${t.id}`;
+      endTd.textContent = t.predicted_finish_local || (t.finished_at_local || '');
+      tr.appendChild(endTd);
 
-        // פעולות
-        const tdAct = document.createElement('td');
-        tdAct.className = 'row-actions';
-        tdAct.innerHTML = `
-          <button onclick="startTask(${t.id})" ${t.status!=='pending'&&t.status!=='paused' ? 'disabled':''}>התחל</button>
-          <button class="warn" onclick="pauseTask(${t.id})" ${t.status!=='active' ? 'disabled':''}>השהה</button>
-          <button class="secondary" onclick="resetTask(${t.id})" ${t.status==='active' ? 'disabled':''}>אפס</button>
-          <button class="danger" onclick="deleteTask(${t.id})" ${t.status==='active' ? 'disabled':''}>מחק</button>
-        `;
-        tr.appendChild(tdAct);
+      // פעולות
+      const actTd = document.createElement('td');
+      let btns = [];
+      if (t.status === 'running') {
+        btns.push(`<button class="btn" onclick="pauseTask(${t.id})">השהה ⏸</button>`);
+      } else if (t.status === 'paused' || t.id === topRunnableId()) {
+        btns.push(`<button class="btn ok" onclick="startTask(${t.id})">התחל ▶</button>`);
+      } else {
+        btns.push(`<button class="btn" disabled title="אפשר להתחיל רק את העליונה או מושהית">התחל ▶</button>`);
+      }
+      btns.push(`<button class="btn" onclick="resetTask(${t.id})">אפס ↺</button>`);
+      btns.push(`<button class="btn danger" onclick="deleteTask(${t.id})">מחק 🗑️</button>`);
+      actTd.innerHTML = btns.join(' ');
+      tr.appendChild(actTd);
 
-        tbody.appendChild(tr);
-      });
+      tbody.appendChild(tr);
+    });
+  }
 
-      document.getElementById('all-end').textContent =
-        state.all_end ? `כל המשימות צפויות להסתיים בשעה: ${fmtDT(state.all_end)}` : '—';
+  function topRunnableId() {
+    // העליונה שאינה Done לפי הרשימה הנוכחית
+    const t = snapshot.find(x => x.status !== 'done');
+    return t ? t.id : -1;
+  }
+
+  // עדכון חזותי כל שנייה
+  setInterval(() => {
+    if (!snapshot || !snapshot.length) return;
+    snapshot.forEach(t => {
+      const cell = document.getElementById(`left-${t.id}`);
+      if (!cell) return;
+      cell.textContent = fmtClock(secsNowFor(t));
+    });
+  }, 1000);
+
+  async function syncState() {
+    const r = await fetch('/state');
+    const data = await r.json();
+    nowUtcStr = data.now_utc;
+    snapshot = data.tasks;
+    lastSync = Date.now();
+    totalFinish.textContent = data.total_finish_local ? `כל המשימות צפויות להסתיים ב־ ${data.total_finish_local}` : '';
+    render();
+  }
+
+  // סנכרון כל 4 שניות + מיד בהעלאה
+  setInterval(syncState, 4000);
+  syncState();
+
+  // --- פעולות שרת ---
+
+  document.getElementById('addBtn').onclick = async () => {
+    const name = document.getElementById('taskName').value.trim() || 'משימה';
+    const h = +document.getElementById('hours').value || 0;
+    const m = +document.getElementById('minutes').value || 0;
+    const s = +document.getElementById('seconds').value || 0;
+
+    addBtn.disabled = true;
+    const r = await fetch('/tasks', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ name, hours:h, minutes:m, seconds:s })
+    });
+    addBtn.disabled = false;
+    if (!r.ok) {
+      alert('שגיאה בהוספה');
+      return;
+    }
+    // ניקוי קלטים
+    document.getElementById('taskName').value = '';
+    document.getElementById('hours').value = '';
+    document.getElementById('minutes').value = '';
+    document.getElementById('seconds').value = '';
+    await syncState();
+  };
+
+  async function startTask(id) {
+    const r = await fetch(`/tasks/${id}/start`, {method:'POST'});
+    if (!r.ok) { const t = await r.text(); alert('אי אפשר להתחיל: ' + t); }
+    await syncState();
+  }
+  async function pauseTask(id) {
+    const r = await fetch(`/tasks/${id}/pause`, {method:'POST'});
+    if (!r.ok) { const t = await r.text(); alert('שגיאה בהשהיה: ' + t); }
+    await syncState();
+  }
+  async function resetTask(id) {
+    const r = await fetch(`/tasks/${id}/reset`, {method:'POST'});
+    if (!r.ok) { const t = await r.text(); alert('שגיאה באיפוס: ' + t); }
+    await syncState();
+  }
+  async function deleteTask(id) {
+    if (!confirm('למחוק את המשימה?')) return;
+    const r = await fetch(`/tasks/${id}`, {method:'DELETE'});
+    if (!r.ok) { const t = await r.text(); alert('שגיאה במחיקה: ' + t); }
+    await syncState();
+  }
+
+  async function saveEdit(id) {
+    const nameInput = document.querySelector(`input[data-id="${id}"][data-kind="name"]`);
+    const hInput = document.querySelector(`input[data-id="${id}"][data-kind="h"]`);
+    const mInput = document.querySelector(`input[data-id="${id}"][data-kind="m"]`);
+    const sInput = document.querySelector(`input[data-id="${id}"][data-kind="s"]`);
+
+    const payload = { name: (nameInput?.value || '').trim() };
+    const anyTime = hInput?.value || mInput?.value || sInput?.value;
+    if (anyTime !== '') {
+      payload.hours = +hInput.value || 0;
+      payload.minutes = +mInput.value || 0;
+      payload.seconds = +sInput.value || 0;
     }
 
-    async function refresh(){
-      const r = await fetch('/state');
-      const state = await r.json();
-      render(state);
-    }
-
-    // ריצה בזמן אמת
-    setInterval(refresh, 1000);
-    refresh();
-  </script>
+    const r = await fetch(`/tasks/${id}`, {
+      method:'PUT',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(payload)
+    });
+    if (!r.ok) { const t = await r.text(); alert('עריכה נכשלה: ' + t); }
+    await syncState();
+  }
+</script>
 </body>
 </html>
