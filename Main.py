@@ -1,170 +1,128 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, jsonify
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
-from pytz import timezone
+from zoneinfo import ZoneInfo
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///tasks.db"
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///tasks.db'
 db = SQLAlchemy(app)
 
-
-# ===== מודל טבלה =====
+# מודל של משימה
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(200), nullable=False)
-    duration = db.Column(db.Integer, nullable=False)  # משך בשניות
+    name = db.Column(db.String(100), nullable=False)
+    hours = db.Column(db.Integer, default=0)
+    minutes = db.Column(db.Integer, default=0)
+    seconds = db.Column(db.Integer, default=0)
+    status = db.Column(db.String(20), default="pending")  # pending / running / paused / finished
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
-    status = db.Column(db.String(20), default="מושהה")
-
-    def remaining(self):
-        """כמה זמן נשאר בשניות"""
-        if self.status == "רץ" and self.end_time:
-            delta = self.end_time - datetime.utcnow()
-            return max(int(delta.total_seconds()), 0)
-        return self.duration
-
-    def formatted_remaining(self):
-        """הצגה בפורמט 00:00:00"""
-        total = self.remaining()
-        h, m = divmod(total, 3600)
-        m, s = divmod(m, 60)
-        return f"{h:02}:{m:02}:{s:02}"
-
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 with app.app_context():
     db.create_all()
 
-
-# ===== פונקציה כללית: עדכון רצף =====
-def update_sequence(finished_task_id=None):
-    """מסיים משימה ומפעיל את הבאה בתור"""
-    if finished_task_id:
-        finished = Task.query.get(finished_task_id)
-        if finished:
-            finished.status = "הסתיים"
-            finished.start_time = None
-            finished.end_time = None
-            db.session.commit()
-
-    # מציאת המשימה הבאה
-    next_task = Task.query.filter(Task.status == "מושהה").order_by(Task.id.asc()).first()
-    if next_task:
-        next_task.start_time = datetime.utcnow()
-        next_task.end_time = next_task.start_time + timedelta(seconds=next_task.duration)
-        next_task.status = "רץ"
-        db.session.commit()
-
-
-# ===== דף ראשי =====
-@app.route("/")
+# דף ראשי
+@app.route('/')
 def index():
-    tasks = Task.query.order_by(Task.id.asc()).all()
-
-    # חישוב שעת סיום כוללת
+    tasks = Task.query.order_by(Task.id.asc()).all()  # משימות לפי סדר יצירה
     total_end_time = None
+
     if tasks:
-        current_time = datetime.utcnow()
-        for t in tasks:
-            if t.status == "רץ" and t.end_time:
-                current_time = t.end_time
-            elif t.status == "מושהה" and t.duration > 0:
-                current_time += timedelta(seconds=t.duration)
-        if current_time:
-            israel = timezone("Asia/Jerusalem")
-            total_end_time = current_time.astimezone(israel).strftime("%H:%M:%S")
+        current_time = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        total_duration = timedelta()
+
+        for task in tasks:
+            total_duration += timedelta(
+                hours=task.hours,
+                minutes=task.minutes,
+                seconds=task.seconds
+            )
+        total_end_time = (current_time + total_duration).strftime("%H:%M:%S")
 
     return render_template("index.html", tasks=tasks, total_end_time=total_end_time)
 
-
-# ===== הוספת משימה =====
-@app.route("/add", methods=["POST"])
+# הוספת משימה
+@app.route('/add', methods=['POST'])
 def add_task():
-    name = request.form["name"]
-    hours = int(request.form.get("hours", 0))
-    minutes = int(request.form.get("minutes", 0))
-    seconds = int(request.form.get("seconds", 0))
-    duration = hours * 3600 + minutes * 60 + seconds
-    if duration <= 0:
-        duration = 1
-    new_task = Task(name=name, duration=duration, status="מושהה")
+    name = request.form['name']
+    hours = int(request.form.get('hours', 0) or 0)
+    minutes = int(request.form.get('minutes', 0) or 0)
+    seconds = int(request.form.get('seconds', 0) or 0)
+
+    new_task = Task(name=name, hours=hours, minutes=minutes, seconds=seconds)
     db.session.add(new_task)
     db.session.commit()
-    return redirect(url_for("index"))
+    return redirect(url_for('index'))
 
-
-# ===== התחלת משימה =====
-@app.route("/start/<int:task_id>")
+# התחלת משימה
+@app.route('/start/<int:task_id>')
 def start_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
-        # רק אם היא מושהית או נעצרה
-        if task.status in ["מושהה", "עצורה"]:
-            task.start_time = datetime.utcnow()
-            task.end_time = task.start_time + timedelta(seconds=task.duration)
-            task.status = "רץ"
-            db.session.commit()
-    return redirect(url_for("index"))
+    task = Task.query.get_or_404(task_id)
+    if task.status in ["pending", "paused"]:
+        task.status = "running"
+        task.start_time = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        task.end_time = task.start_time + timedelta(
+            hours=task.hours, minutes=task.minutes, seconds=task.seconds
+        )
+        db.session.commit()
+    return redirect(url_for('index'))
 
-
-# ===== עצירת משימה =====
-@app.route("/pause/<int:task_id>")
+# השהיית משימה
+@app.route('/pause/<int:task_id>')
 def pause_task(task_id):
-    task = Task.query.get(task_id)
-    if task and task.status == "רץ":
-        task.duration = task.remaining()  # שמירת הזמן שנותר
-        task.status = "עצורה"
-        task.start_time = None
-        task.end_time = None
+    task = Task.query.get_or_404(task_id)
+    if task.status == "running":
+        task.status = "paused"
+        now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        if task.end_time:
+            remaining = task.end_time - now
+            task.hours = max(0, remaining.seconds // 3600)
+            task.minutes = max(0, (remaining.seconds % 3600) // 60)
+            task.seconds = max(0, remaining.seconds % 60)
         db.session.commit()
-    return redirect(url_for("index"))
+    return redirect(url_for('index'))
 
-
-# ===== איפוס משימה =====
-@app.route("/reset/<int:task_id>")
-def reset_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
-        task.status = "מושהה"  # לא מתחיל אוטומטית
-        task.start_time = None
-        task.end_time = None
-        db.session.commit()
-    return redirect(url_for("index"))
-
-
-# ===== סיום משימה =====
-@app.route("/finish/<int:task_id>")
+# סיום משימה
+@app.route('/finish/<int:task_id>')
 def finish_task(task_id):
-    update_sequence(finished_task_id=task_id)
-    return redirect(url_for("index"))
+    task = Task.query.get_or_404(task_id)
+    task.status = "finished"
+    db.session.commit()
+    return redirect(url_for('index'))
 
-
-# ===== עריכת משימה =====
-@app.route("/edit/<int:task_id>", methods=["POST"])
-def edit_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
-        task.name = request.form["name"]
-        hours = int(request.form.get("hours", 0))
-        minutes = int(request.form.get("minutes", 0))
-        seconds = int(request.form.get("seconds", 0))
-        task.duration = hours * 3600 + minutes * 60 + seconds
-        task.start_time = None
-        task.end_time = None
-        task.status = "מושהה"
-        db.session.commit()
-    return redirect(url_for("index"))
-
-
-# ===== מחיקת משימה =====
-@app.route("/delete/<int:task_id>")
+# מחיקת משימה
+@app.route('/delete/<int:task_id>')
 def delete_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
-        db.session.delete(task)
-        db.session.commit()
-    return redirect(url_for("index"))
+    task = Task.query.get_or_404(task_id)
+    db.session.delete(task)
+    db.session.commit()
+    return redirect(url_for('index'))
 
+# עריכת משימה
+@app.route('/edit/<int:task_id>', methods=['POST'])
+def edit_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    task.name = request.form['name']
+    task.hours = int(request.form.get('hours', 0) or 0)
+    task.minutes = int(request.form.get('minutes', 0) or 0)
+    task.seconds = int(request.form.get('seconds', 0) or 0)
+    db.session.commit()
+    return redirect(url_for('index'))
+
+# API – זמן נותר (בשביל JS בזמן אמת)
+@app.route('/remaining/<int:task_id>')
+def remaining_time(task_id):
+    task = Task.query.get_or_404(task_id)
+    if task.status == "running" and task.end_time:
+        now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        remaining = task.end_time - now
+        if remaining.total_seconds() <= 0:
+            task.status = "finished"
+            db.session.commit()
+            return jsonify({"time": "00:00:00", "status": "finished"})
+        return jsonify({"time": str(remaining), "status": task.status})
+    return jsonify({"time": f"{task.hours:02d}:{task.minutes:02d}:{task.seconds:02d}", "status": task.status})
 
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=5000)
+    app.run(host="0.0.0.0", port=5000)
