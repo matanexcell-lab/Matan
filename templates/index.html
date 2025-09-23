@@ -47,36 +47,31 @@
   </table>
 
   <script>
-    // כשעורכים שדה – לא לדרוס אותו מכל רענון
-    const editing = new Set(); // "row-input-<id>-<field>"
-
-    function key(id, field){ return `row-input-${id}-${field}`; }
+    const editing = new Set();
+    function key(id, field){ return `row-${id}-${field}`; }
 
     function start(id){ $.post(`/start/${id}`, ()=>refresh()); }
     function pause(id){ $.post(`/pause/${id}`, ()=>refresh()); }
     function resetTask(id){ $.post(`/reset/${id}`, ()=>refresh()); }
-    function delTask(id){ $.get(`/delete/${id}`, ()=>refresh()); }
+    function delTask(id){ $.post(`/delete/${id}`, ()=>refresh()); }
 
     function saveName(id){
-      const $inp = $(`#name-${id}`);
-      const val = $inp.val();
+      const val = $(`#name-${id}`).val();
       $.post(`/edit/${id}`, {name: val}, ()=>refresh());
     }
-
     function saveTime(id){
       const h = $(`#h-${id}`).val() || 0;
       const m = $(`#m-${id}`).val() || 0;
       const s = $(`#s-${id}`).val() || 0;
       const nm = $(`#name-${id}`).val() || "";
-      $.post(`/edit/${id}`, {name:nm, hours:h, minutes:m, seconds:s}, ()=>refresh());
+      $.post(`/edit/${id}`, {name:nm,hours:h,minutes:m,seconds:s}, ()=>refresh());
     }
 
     function bindFreeze($el, id, field){
-      const k = key(id, field);
+      const k=key(id,field);
       $el.on("focus", ()=>editing.add(k));
-      $el.on("blur",  ()=>editing.delete(k));
-      // אם לוחצים Enter בתוך השדות – לא תתבצע שליחה/רענון אוטומטי
-      $el.on("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); $el.blur(); }});
+      $el.on("blur", ()=>editing.delete(k));
+      $el.on("keydown",(e)=>{ if(e.key==="Enter"){ e.preventDefault(); saveTime(id); $el.blur(); }});
     }
 
     function refresh(){
@@ -85,67 +80,56 @@
         const $tb = $("#taskBody").empty();
 
         resp.tasks.forEach(t=>{
-          const running = (t.status === "רץ");
+          const running = (t.status==="רץ");
           const row = $(`
-            <tr id="row-${t.id}">
-              <td>
-                ${running
-                  ? `<span class="muted">${t.name}</span>`
-                  : `<input id="name-${t.id}" type="text" value="${t.name}" />`
-                }
+            <tr>
+              <td>${running
+                ? `<span class="muted">${t.name}</span>`
+                : `<input id="name-${t.id}" type="text" value="${t.name}" />`}
               </td>
               <td>${t.status}</td>
               <td>${t.initial}</td>
-              <td>${t.end_time || ""}</td>
+              <td>${t.end_time||""}</td>
               <td>${t.remaining}</td>
               <td>
-                <button onclick="start(${t.id})">▶️ התחל</button>
-                <button onclick="pause(${t.id})">⏸️ השהה</button>
-                <button onclick="resetTask(${t.id})">🔄 איפוס</button>
-                <button onclick="delTask(${t.id})">🗑️ מחק</button>
-                <div ${running ? 'class="muted"': ""} style="margin-top:6px">
+                <button onclick="start(${t.id})">▶️</button>
+                <button onclick="pause(${t.id})">⏸️</button>
+                <button onclick="resetTask(${t.id})">🔄</button>
+                <button onclick="delTask(${t.id})">🗑️</button>
+                <div ${running?'class="muted"':""}>
                   שעות: <input id="h-${t.id}" class="edit-time" type="number" min="0">
                   דקות: <input id="m-${t.id}" class="edit-time" type="number" min="0">
                   שניות: <input id="s-${t.id}" class="edit-time" type="number" min="0">
-                  <button onclick="saveTime(${t.id})" ${running ? "disabled" : ""}>✏️ עדכן זמן</button>
+                  <button onclick="saveTime(${t.id})" ${running?"disabled":""}>עדכן</button>
                 </div>
               </td>
             </tr>
           `);
-
           $tb.append(row);
 
-          // קביעת ערכים של שדות העריכה רק אם לא בעיצומו של עריכה ידנית
           if(!running){
-            const kH = key(t.id,"h"), kM = key(t.id,"m"), kS = key(t.id,"s"), kN = key(t.id,"name");
-            if(!editing.has(kH)) $(`#h-${t.id}`).val(t.editable_hours);
-            if(!editing.has(kM)) $(`#m-${t.id}`).val(t.editable_minutes);
-            if(!editing.has(kS)) $(`#s-${t.id}`).val(t.editable_seconds);
-            if(!editing.has(kN)) $(`#name-${t.id}`).val(t.name);
+            if(!editing.has(key(t.id,"h"))) $(`#h-${t.id}`).val(t.editable_hours);
+            if(!editing.has(key(t.id,"m"))) $(`#m-${t.id}`).val(t.editable_minutes);
+            if(!editing.has(key(t.id,"s"))) $(`#s-${t.id}`).val(t.editable_seconds);
+            if(!editing.has(key(t.id,"name"))) $(`#name-${t.id}`).val(t.name);
 
-            bindFreeze($(`#h-${t.id}`), t.id, "h");
-            bindFreeze($(`#m-${t.id}`), t.id, "m");
-            bindFreeze($(`#s-${t.id}`), t.id, "s");
-            bindFreeze($(`#name-${t.id}`), t.id, "name");
+            bindFreeze($(`#h-${t.id}`),t.id,"h");
+            bindFreeze($(`#m-${t.id}`),t.id,"m");
+            bindFreeze($(`#s-${t.id}`),t.id,"s");
+            bindFreeze($(`#name-${t.id}`),t.id,"name");
 
-            // שמירת שם גם ב-Change
-            $(`#name-${t.id}`).off("change").on("change", ()=>saveName(t.id));
+            $(`#name-${t.id}`).off("change").on("change",()=>saveName(t.id));
           }
         });
       });
     }
 
-    // הוספת משימה
-    $("#addForm").on("submit", function(e){
+    $("#addForm").on("submit",function(e){
       e.preventDefault();
-      $.post("/add", $(this).serialize(), function(){
-        // אחרי הוספה – הטבלה מתעדכנת, והמשימה החדשה תופיע למטה
-        refresh();
-      });
+      $.post("/add",$(this).serialize(),()=>refresh());
     });
 
-    // רענון כל שניה (תצוגה/טיימרים)
-    setInterval(refresh, 1000);
+    setInterval(refresh,1000);
     refresh();
   </script>
 </body>
