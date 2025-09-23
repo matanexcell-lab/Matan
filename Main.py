@@ -10,7 +10,7 @@ db = SQLAlchemy(app)
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    duration = db.Column(db.Integer, nullable=False)  # משך בשניות
+    duration = db.Column(db.Integer, nullable=False)  # בשניות
     remaining = db.Column(db.Integer, nullable=False)
     status = db.Column(db.String(20), default="pending")  # pending / running / paused / finished
     start_time = db.Column(db.DateTime, nullable=True)
@@ -18,9 +18,9 @@ class Task(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     def remaining_time(self):
-        if self.status == "running" and self.start_time:
-            elapsed = (datetime.utcnow() - self.start_time).total_seconds()
-            return max(self.remaining - int(elapsed), 0)
+        if self.status == "running" and self.end_time:
+            remaining = (self.end_time - datetime.utcnow()).total_seconds()
+            return max(int(remaining), 0)
         return self.remaining
 
 
@@ -43,7 +43,7 @@ def add_task():
     s = int(request.form.get("seconds", 0))
     duration = h * 3600 + m * 60 + s
     if duration <= 0:
-        duration = 60  # ברירת מחדל דקה אחת
+        duration = 60
     task = Task(name=name, duration=duration, remaining=duration, status="pending")
     db.session.add(task)
     db.session.commit()
@@ -65,9 +65,11 @@ def start_task(task_id):
 def pause_task(task_id):
     task = Task.query.get_or_404(task_id)
     if task.status == "running":
-        elapsed = (datetime.utcnow() - task.start_time).total_seconds()
-        task.remaining = max(task.remaining - int(elapsed), 0)
+        remaining = task.remaining_time()
+        task.remaining = remaining
         task.status = "paused"
+        task.start_time = None
+        task.end_time = None
         db.session.commit()
     return redirect(url_for("index"))
 
@@ -75,7 +77,7 @@ def pause_task(task_id):
 @app.route("/resume/<int:task_id>")
 def resume_task(task_id):
     task = Task.query.get_or_404(task_id)
-    if task.status == "paused":
+    if task.status == "paused" and task.remaining > 0:
         task.status = "running"
         task.start_time = datetime.utcnow()
         task.end_time = task.start_time + timedelta(seconds=task.remaining)
@@ -88,6 +90,14 @@ def finish_task(task_id):
     task = Task.query.get_or_404(task_id)
     task.status = "finished"
     task.remaining = 0
+    db.session.commit()
+    return redirect(url_for("index"))
+
+
+@app.route("/delete/<int:task_id>")
+def delete_task(task_id):
+    task = Task.query.get_or_404(task_id)
+    db.session.delete(task)
     db.session.commit()
     return redirect(url_for("index"))
 
@@ -105,7 +115,9 @@ def update_task(task_id):
             duration = 60
         task.duration = duration
         task.remaining = duration
+        task.start_time = None
         task.end_time = None
+        task.status = "pending"
         db.session.commit()
     return redirect(url_for("index"))
 
