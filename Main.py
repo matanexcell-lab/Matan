@@ -3,106 +3,84 @@ from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///tasks.db"
-app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///tasks.db'
 db = SQLAlchemy(app)
 
 
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    duration_minutes = db.Column(db.Integer, nullable=True)
-    status = db.Column(db.String(20), default="ממתינה")  # ממתינה / פעילה / מושהית / הסתיימה
+    duration = db.Column(db.Integer, nullable=False)  # שניות
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
+    status = db.Column(db.String(20), default="pending")  # pending / running / paused / finished
+
+    def remaining_time(self):
+        if self.status == "running" and self.start_time:
+            elapsed = (datetime.utcnow() - self.start_time).total_seconds()
+            return max(0, self.duration - int(elapsed))
+        elif self.status == "paused" and self.end_time:
+            return max(0, self.duration - int((self.end_time - self.start_time).total_seconds()))
+        elif self.status == "finished":
+            return 0
+        return self.duration
 
 
-with app.app_context():
+@app.before_first_request
+def create_tables():
     db.create_all()
-
-
-def recalc_schedule():
-    """חשב מחדש את זמני ההתחלה/סיום לכל המשימות שעדיין לא הסתיימו"""
-    tasks = Task.query.filter(Task.status.in_(["ממתינה", "פעילה", "מושהית"])) \
-                      .order_by(Task.created_at.asc()).all()
-
-    active_task = Task.query.filter_by(status="פעילה").first()
-    if active_task and active_task.end_time:
-        current_time = active_task.end_time
-    else:
-        current_time = datetime.utcnow()
-
-    for task in tasks:
-        if task.status in ["ממתינה", "מושהית"]:
-            if task.duration_minutes:
-                task.start_time = current_time
-                task.end_time = current_time + timedelta(minutes=task.duration_minutes)
-                current_time = task.end_time
-    db.session.commit()
 
 
 @app.route("/")
 def index():
-    tasks = Task.query.order_by(Task.created_at.asc()).all()
-    return render_template("index.html", tasks=tasks)
+    tasks = Task.query.order_by(Task.created_at.desc()).all()
+    return render_template("index.html", tasks=tasks, datetime=datetime)
 
 
 @app.route("/add", methods=["POST"])
 def add_task():
-    name = request.form.get("name")
-    duration = request.form.get("duration")
-
-    if name:
-        task = Task(
-            name=name,
-            duration_minutes=int(duration) if duration else None,
-            status="ממתינה"
-        )
-        db.session.add(task)
-        db.session.commit()
-        recalc_schedule()
-
+    name = request.form["name"]
+    minutes = int(request.form.get("minutes", 0) or 0)
+    seconds = int(request.form.get("seconds", 0) or 0)
+    duration = minutes * 60 + seconds
+    new_task = Task(name=name, duration=duration)
+    db.session.add(new_task)
+    db.session.commit()
     return redirect(url_for("index"))
 
 
 @app.route("/start/<int:task_id>")
 def start_task(task_id):
     task = Task.query.get(task_id)
-    if task and task.status in ["ממתינה", "מושהית"]:
-        task.status = "פעילה"
+    if task:
         task.start_time = datetime.utcnow()
-        if task.duration_minutes:
-            task.end_time = task.start_time + timedelta(minutes=task.duration_minutes)
+        task.end_time = None
+        task.status = "running"
         db.session.commit()
-        recalc_schedule()
     return redirect(url_for("index"))
 
 
 @app.route("/pause/<int:task_id>")
 def pause_task(task_id):
     task = Task.query.get(task_id)
-    if task and task.status == "פעילה":
-        task.status = "מושהית"
-        if task.start_time:
-            elapsed = (datetime.utcnow() - task.start_time).seconds // 60
-            if task.duration_minutes:
-                task.duration_minutes = max(0, task.duration_minutes - elapsed)
+    if task and task.status == "running":
+        task.end_time = datetime.utcnow()
+        task.status = "paused"
         db.session.commit()
-        recalc_schedule()
     return redirect(url_for("index"))
 
 
 @app.route("/resume/<int:task_id>")
 def resume_task(task_id):
     task = Task.query.get(task_id)
-    if task and task.status == "מושהית":
-        task.status = "פעילה"
+    if task and task.status == "paused":
+        paused_duration = (task.end_time - task.start_time).total_seconds()
+        task.duration -= int(paused_duration)
         task.start_time = datetime.utcnow()
-        if task.duration_minutes:
-            task.end_time = task.start_time + timedelta(minutes=task.duration_minutes)
+        task.end_time = None
+        task.status = "running"
         db.session.commit()
-        recalc_schedule()
     return redirect(url_for("index"))
 
 
@@ -110,10 +88,21 @@ def resume_task(task_id):
 def finish_task(task_id):
     task = Task.query.get(task_id)
     if task:
-        task.status = "הסתיימה"
+        task.status = "finished"
         task.end_time = datetime.utcnow()
         db.session.commit()
-        recalc_schedule()
+    return redirect(url_for("index"))
+
+
+@app.route("/edit/<int:task_id>", methods=["POST"])
+def edit_task(task_id):
+    task = Task.query.get(task_id)
+    if task and task.status in ["pending", "paused"]:
+        task.name = request.form["name"]
+        minutes = int(request.form.get("minutes", 0) or 0)
+        seconds = int(request.form.get("seconds", 0) or 0)
+        task.duration = minutes * 60 + seconds
+        db.session.commit()
     return redirect(url_for("index"))
 
 
