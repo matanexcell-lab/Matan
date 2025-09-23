@@ -5,13 +5,9 @@
     <title>טיימר משימות</title>
     <style>
         body { font-family: Arial, sans-serif; margin: 20px; background:#f9f9f9; }
-        h1 { margin-bottom: 10px; }
         table { border-collapse: collapse; width: 100%; background: white; }
         th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
         th { background: #eee; }
-        button { margin: 2px; padding: 5px 10px; }
-        input[type=number] { width: 60px; }
-        input[type=text] { width: 150px; }
         .running { background: #d1ffd1; }
         .paused { background: #fff3cd; }
         .done { background: #f0f0f0; text-decoration: line-through; }
@@ -46,98 +42,96 @@
                 <th>פעולות</th>
             </tr>
         </thead>
-        <tbody id="tasksBody">
-            {% for t in tasks %}
-            <tr id="task-{{t.id}}" class="{{t.status}}">
-                <td contenteditable="true" onblur="editTask({{t.id}}, this.innerText, null, null, null)">{{t.name}}</td>
-                <td>{{t.status}}</td>
-                <td>{{t.remaining_seconds}}</td>
-                <td>{{t.end_time or ''}}</td>
-                <td>
-                    <button onclick="startTask({{t.id}})">▶️ התחל</button>
-                    <button onclick="pauseTask({{t.id}})">⏸️ השהה</button>
-                    <button onclick="finishTask({{t.id}})">✅ סיים</button>
-                    <button onclick="deleteTask({{t.id}})">🗑️ מחק</button><br>
-                    <label>שעות</label><input type="number" id="h-{{t.id}}" value="0" min="0">
-                    <label>דקות</label><input type="number" id="m-{{t.id}}" value="0" min="0">
-                    <label>שניות</label><input type="number" id="s-{{t.id}}" value="0" min="0">
-                    <button onclick="editTask({{t.id}}, null,
-                            document.getElementById('h-{{t.id}}').value,
-                            document.getElementById('m-{{t.id}}').value,
-                            document.getElementById('s-{{t.id}}').value)">✏️ עדכן זמן</button>
-                </td>
-            </tr>
-            {% endfor %}
-        </tbody>
+        <tbody id="tasksBody"></tbody>
     </table>
 
 <script>
-async function addTask() {
+let tasks = {};
+
+function formatTime(sec){
+    if(sec==null) return "";
+    let h = Math.floor(sec/3600);
+    let m = Math.floor((sec%3600)/60);
+    let s = sec%60;
+    return `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`;
+}
+
+async function addTask(){
     const name = document.getElementById("newName").value;
-    const hours = parseInt(document.getElementById("newHours").value) || 0;
-    const minutes = parseInt(document.getElementById("newMinutes").value) || 0;
-    const seconds = parseInt(document.getElementById("newSeconds").value) || 0;
+    const hours = parseInt(document.getElementById("newHours").value)||0;
+    const minutes = parseInt(document.getElementById("newMinutes").value)||0;
+    const seconds = parseInt(document.getElementById("newSeconds").value)||0;
     const duration = hours*3600 + minutes*60 + seconds;
-    if(duration <= 0){
-        document.getElementById("addError").innerText = "⛔ יש להזין זמן גדול מ-0";
+    if(duration<=0){
+        document.getElementById("addError").innerText="⛔ יש להזין זמן גדול מ-0";
         return;
     }
-    const res = await fetch("/tasks", {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify({name, hours, minutes, seconds})
-    });
-    if(res.ok){ location.reload(); }
+    const res = await fetch("/tasks",{method:"POST",headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({name,hours,minutes,seconds})});
+    if(res.ok) location.reload();
     else{
-        const data = await res.json();
-        document.getElementById("addError").innerText = data.error || "שגיאה";
+        const d = await res.json(); document.getElementById("addError").innerText=d.error||"שגיאה";
     }
 }
 
-async function startTask(id){
-    await fetch(`/start/${id}`, {method:"POST"});
-    location.reload();
+async function startTask(id){ await fetch(`/start/${id}`,{method:"POST"}); }
+async function pauseTask(id){ await fetch(`/pause/${id}`,{method:"POST"}); }
+async function finishTask(id){ await fetch(`/finish/${id}`,{method:"POST"}); }
+async function resetTask(id){ await fetch(`/reset/${id}`,{method:"POST"}); }
+async function deleteTask(id){ await fetch(`/delete/${id}`,{method:"POST"}); }
+async function editTask(id,newName,h,m,s){
+    const body={}; if(newName!==null) body.name=newName;
+    if(h||m||s){body.hours=h;body.minutes=m;body.seconds=s;}
+    await fetch(`/edit/${id}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
 }
-async function pauseTask(id){
-    await fetch(`/pause/${id}`, {method:"POST"});
-    location.reload();
-}
-async function finishTask(id){
-    await fetch(`/finish/${id}`, {method:"POST"});
-    location.reload();
-}
-async function deleteTask(id){
-    await fetch(`/delete/${id}`, {method:"POST"});
-    location.reload();
-}
-async function editTask(id, newName, h,m,s){
-    const body = {};
-    if(newName!==null) body.name=newName;
-    if(h!==null || m!==null || s!==null){
-        body.hours=h; body.minutes=m; body.seconds=s;
-    }
-    await fetch(`/edit/${id}`, {
-        method:"POST", headers:{"Content-Type":"application/json"},
-        body: JSON.stringify(body)
+
+function renderTasks(list){
+    const tbody=document.getElementById("tasksBody"); tbody.innerHTML="";
+    list.forEach(t=>{
+        tasks[t.id]=t;
+        const tr=document.createElement("tr"); tr.id="task-"+t.id; tr.className=t.status;
+        tr.innerHTML=`
+            <td contenteditable="true" onblur="editTask(${t.id}, this.innerText, null, null, null)">${t.name}</td>
+            <td>${t.status}</td>
+            <td id="remain-${t.id}">${formatTime(t.remaining_seconds)}</td>
+            <td>${t.end_time||""}</td>
+            <td>
+                <button onclick="startTask(${t.id})">▶️ התחל</button>
+                <button onclick="pauseTask(${t.id})">⏸️ השהה</button>
+                <button onclick="finishTask(${t.id})">✅ סיים</button>
+                <button onclick="resetTask(${t.id})">🌀 איפוס</button>
+                <button onclick="deleteTask(${t.id})">🗑️ מחק</button><br>
+                <label>שעות</label><input type="number" id="h-${t.id}" value="0" min="0">
+                <label>דקות</label><input type="number" id="m-${t.id}" value="0" min="0">
+                <label>שניות</label><input type="number" id="s-${t.id}" value="0" min="0">
+                <button onclick="editTask(${t.id}, null,
+                        document.getElementById('h-${t.id}').value,
+                        document.getElementById('m-${t.id}').value,
+                        document.getElementById('s-${t.id}').value)">✏️ עדכן זמן</button>
+            </td>`;
+        tbody.appendChild(tr);
     });
-    location.reload();
 }
 
 async function refreshState(){
-    const res = await fetch("/state");
+    const res=await fetch("/state");
     if(res.ok){
-        const tasks = await res.json();
-        tasks.forEach(t=>{
-            const row = document.getElementById("task-"+t.id);
-            if(row){
-                row.className = t.status;
-                row.cells[1].innerText = t.status;
-                row.cells[2].innerText = t.remaining_seconds;
-                row.cells[3].innerText = t.end_time || "";
-            }
-        });
+        const list=await res.json(); renderTasks(list);
     }
 }
-setInterval(refreshState, 1000);
+
+setInterval(async ()=>{
+    for(const id in tasks){
+        const t=tasks[id];
+        if(t.status==="running" && t.remaining_seconds>0){
+            t.remaining_seconds-=1;
+            document.getElementById("remain-"+id).innerText=formatTime(t.remaining_seconds);
+        }
+    }
+},1000);
+
+setInterval(refreshState,5000);
+refreshState();
 </script>
 </body>
 </html>
