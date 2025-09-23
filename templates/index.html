@@ -1,75 +1,209 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="he" dir="rtl">
 <head>
-  <meta charset="UTF-8">
-  <title>⏱️ טיימר משימות</title>
-  <script>
-    async function addTask() {
-      const name = document.getElementById("name").value;
-      const hours = document.getElementById("hours").value;
-      const minutes = document.getElementById("minutes").value;
-      const seconds = document.getElementById("seconds").value;
-
-      await fetch("/add", {
-        method: "POST",
-        body: new URLSearchParams({name, hours, minutes, seconds})
-      });
-      location.reload();
-    }
-
-    async function startTask(id) {
-      await fetch(`/start/${id}`, {method: "POST"});
-    }
-
-    async function pauseTask(id) {
-      await fetch(`/pause/${id}`, {method: "POST"});
-    }
-
-    async function deleteTask(id) {
-      await fetch(`/delete/${id}`, {method: "DELETE"});
-      location.reload();
-    }
-
-    async function updateTimers() {
-      const timers = document.querySelectorAll(".task");
-      for (let t of timers) {
-        const id = t.dataset.id;
-        const res = await fetch(`/remaining/${id}`);
-        const data = await res.json();
-        if (data.remaining_seconds !== undefined) {
-          const sec = data.remaining_seconds;
-          const h = Math.floor(sec / 3600);
-          const m = Math.floor((sec % 3600) / 60);
-          const s = sec % 60;
-          t.querySelector(".remaining").innerText = `${h}:${m}:${s}`;
-        }
-      }
-    }
-    setInterval(updateTimers, 1000);
-  </script>
+  <meta charset="utf-8" />
+  <title>טיימר משימות ⏱️</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, Arial, sans-serif; background:#f6f7fb; margin:0; padding:24px; }
+    h1 { margin: 0 0 16px; }
+    .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+    input[type=number] { width:6rem; padding:8px; }
+    input[type=text] { width:14rem; padding:8px; }
+    button { padding:8px 12px; border:0; border-radius:8px; cursor:pointer; background:#2563eb; color:#fff; }
+    button.secondary { background:#e5e7eb; color:#111; }
+    button.warn { background:#f59e0b; }
+    button.danger { background:#ef4444; }
+    button:disabled { opacity:.55; cursor:not-allowed; }
+    table { width:100%; border-collapse:separate; border-spacing:0; background:#fff; border-radius:12px; overflow:hidden; }
+    th,td { padding:10px 12px; border-bottom:1px solid #eee; text-align:center; }
+    th { background:#f0f2f8; font-weight:600; }
+    tr:last-child td { border-bottom:0; }
+    .muted { color:#6b7280; font-size:.9em; }
+    .status { padding:2px 8px; border-radius:999px; font-size:.85em; }
+    .active { background:#dcfce7; color:#166534; }
+    .paused { background:#fde68a; color:#92400e; }
+    .pending { background:#e5e7eb; color:#111827; }
+    .done { background:#e5e7eb; color:#6b7280; }
+    .row-actions { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; }
+    .inline-edit { display:flex; gap:6px; justify-content:center; align-items:center; }
+    .small { width:4.5rem; }
+    .top-info { margin:10px 0 18px; }
+  </style>
 </head>
 <body>
-  <h1>⏱️ טיימר משימות</h1>
+  <h1>טיימר משימות ⏱️</h1>
 
-  <div>
-    <input id="name" placeholder="שם משימה">
-    <input id="hours" type="number" placeholder="שעות" value="0">
-    <input id="minutes" type="number" placeholder="דקות" value="0">
-    <input id="seconds" type="number" placeholder="שניות" value="0">
+  <div class="bar">
+    <input id="task-name" type="text" placeholder="שם משימה" />
+    <input id="h" type="number" min="0" value="0" placeholder="שעות" class="small" />
+    <input id="m" type="number" min="0" value="0" placeholder="דקות" class="small" />
+    <input id="s" type="number" min="0" value="0" placeholder="שניות" class="small" />
     <button onclick="addTask()">➕ הוסף משימה</button>
   </div>
 
-  <h2>רשימת משימות</h2>
-  <ul>
-    {% for task in tasks %}
-      <li class="task" data-id="{{task.id}}">
-        <b>{{task.name}}</b> | נותר: 
-        <span class="remaining">--:--:--</span>
-        <button onclick="startTask({{task.id}})">▶️ התחל</button>
-        <button onclick="pauseTask({{task.id}})">⏸️ השהה</button>
-        <button onclick="deleteTask({{task.id}})">🗑️ מחק</button>
-      </li>
-    {% endfor %}
-  </ul>
+  <div id="all-end" class="top-info muted">—</div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>שם</th>
+        <th>מצב</th>
+        <th>משך</th>
+        <th>נותר</th>
+        <th>שעת סיום צפויה</th>
+        <th>עריכה</th>
+        <th>פעולות</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+
+  <script>
+    const tz = 'Asia/Jerusalem';
+
+    const fmtHMS = (sec) => {
+      sec = Math.max(0, Math.floor(sec||0));
+      const h = Math.floor(sec/3600);
+      const m = Math.floor((sec%3600)/60);
+      const s = sec%60;
+      const pad = (n)=> String(n).padStart(2,'0');
+      return `${pad(h)}:${pad(m)}:${pad(s)}`;
+    };
+    const fmtDT = (iso) => {
+      if(!iso) return '—';
+      const d = new Date(iso);
+      return d.toLocaleString('he-IL', { timeZone: tz, hour12:false });
+    };
+
+    async function addTask() {
+      const body = new URLSearchParams({
+        name: document.getElementById('task-name').value,
+        hours: document.getElementById('h').value,
+        minutes: document.getElementById('m').value,
+        seconds: document.getElementById('s').value,
+      });
+      const r = await fetch('/add', { method:'POST', body });
+      if (!r.ok) { alert('שגיאה בהוספה'); return; }
+      document.getElementById('task-name').value='';
+      document.getElementById('h').value=0;
+      document.getElementById('m').value=0;
+      document.getElementById('s').value=0;
+      await refresh();
+    }
+
+    async function startTask(id){
+      const r = await fetch(`/start/${id}`, {method:'POST'});
+      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
+      await refresh();
+    }
+    async function pauseTask(id){
+      const r = await fetch(`/pause/${id}`, {method:'POST'});
+      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
+      await refresh();
+    }
+    async function resetTask(id){
+      const r = await fetch(`/reset/${id}`, {method:'POST'});
+      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
+      await refresh();
+    }
+    async function deleteTask(id){
+      if(!confirm('למחוק את המשימה?')) return;
+      const r = await fetch(`/delete/${id}`, {method:'DELETE'});
+      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
+      await refresh();
+    }
+
+    async function saveEdit(id){
+      const name = document.querySelector(`#row-${id} .edit-name`).value;
+      const hh = document.querySelector(`#row-${id} .edit-h`).value;
+      const mm = document.querySelector(`#row-${id} .edit-m`).value;
+      const ss = document.querySelector(`#row-${id} .edit-s`).value;
+      const r = await fetch(`/edit/${id}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ name, hours:hh, minutes:mm, seconds:ss })
+      });
+      if(!r.ok){ const j=await r.json(); alert(j.error||'שגיאה'); }
+      await refresh();
+    }
+
+    function render(state){
+      const tbody = document.getElementById('rows');
+      tbody.innerHTML = '';
+      state.tasks.forEach(t=>{
+        const tr = document.createElement('tr');
+        tr.id = `row-${t.id}`;
+
+        const statusClass = t.status === 'active' ? 'active'
+                            : t.status === 'paused' ? 'paused'
+                            : t.status === 'pending' ? 'pending' : 'done';
+
+        // שם
+        const tdName = document.createElement('td');
+        tdName.innerHTML = `<input class="edit-name" type="text" value="${t.name.replaceAll('"','&quot;')}" ${t.status==='active'?'disabled':''} />`;
+        tr.appendChild(tdName);
+
+        // מצב
+        const tdSt = document.createElement('td');
+        const label = t.status==='active'?'פעילה':t.status==='paused'?'מושהית':t.status==='pending'?'ממתינה':'הסתיימה';
+        tdSt.innerHTML = `<span class="status ${statusClass}">${label}</span>`;
+        tr.appendChild(tdSt);
+
+        // משך
+        const tdDur = document.createElement('td');
+        tdDur.innerHTML = `
+          <div class="inline-edit">
+            <input class="edit-h small" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${t.status==='active'?'disabled':''} />
+            <input class="edit-m small" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${t.status==='active'?'disabled':''} />
+            <input class="edit-s small" type="number" min="0" value="${t.duration%60}" ${t.status==='active'?'disabled':''} />
+          </div>`;
+        tr.appendChild(tdDur);
+
+        // נותר
+        const tdRem = document.createElement('td');
+        tdRem.className = 'rem';
+        tdRem.textContent = fmtHMS(t.remaining);
+        tr.appendChild(tdRem);
+
+        // סיום צפוי
+        const tdEnd = document.createElement('td');
+        tdEnd.className = 'pred';
+        tdEnd.textContent = fmtDT(t.predicted_end);
+        tr.appendChild(tdEnd);
+
+        // כפתור שמירת עריכה (כשלא פעילה)
+        const tdEdit = document.createElement('td');
+        tdEdit.innerHTML = `<button class="secondary" onclick="saveEdit(${t.id})" ${t.status==='active'?'disabled':''}>שמור</button>`;
+        tr.appendChild(tdEdit);
+
+        // פעולות
+        const tdAct = document.createElement('td');
+        tdAct.className = 'row-actions';
+        tdAct.innerHTML = `
+          <button onclick="startTask(${t.id})" ${t.status!=='pending'&&t.status!=='paused' ? 'disabled':''}>התחל</button>
+          <button class="warn" onclick="pauseTask(${t.id})" ${t.status!=='active' ? 'disabled':''}>השהה</button>
+          <button class="secondary" onclick="resetTask(${t.id})" ${t.status==='active' ? 'disabled':''}>אפס</button>
+          <button class="danger" onclick="deleteTask(${t.id})" ${t.status==='active' ? 'disabled':''}>מחק</button>
+        `;
+        tr.appendChild(tdAct);
+
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('all-end').textContent =
+        state.all_end ? `כל המשימות צפויות להסתיים בשעה: ${fmtDT(state.all_end)}` : '—';
+    }
+
+    async function refresh(){
+      const r = await fetch('/state');
+      const state = await r.json();
+      render(state);
+    }
+
+    // ריצה בזמן אמת
+    setInterval(refresh, 1000);
+    refresh();
+  </script>
 </body>
 </html>
