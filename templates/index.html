@@ -2,94 +2,69 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>טיימר משימות</title>
+    <title>⏱ טיימר משימות</title>
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f9f9f9;
-            color: #333;
-            text-align: center;
-            direction: rtl;
+        body { font-family: Arial, sans-serif; direction: rtl; margin: 40px; }
+        h1 { color: #333; }
+        form { margin-bottom: 20px; }
+        input { padding: 5px; margin: 5px; }
+        button, a {
+            padding: 5px 10px; margin: 2px;
+            background: #007bff; color: white;
+            text-decoration: none; border-radius: 4px;
         }
-        h1 {
-            color: #007BFF;
-        }
-        form {
-            margin: 15px 0;
-        }
-        input[type="text"] {
-            padding: 8px;
-            width: 200px;
-        }
-        button {
-            padding: 8px 15px;
-            margin: 2px;
-            border: none;
-            background: #007BFF;
-            color: white;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        button:hover {
-            background: #0056b3;
-        }
-        ul {
-            list-style: none;
-            padding: 0;
-            max-width: 500px;
-            margin: auto;
-        }
-        li {
-            background: white;
-            margin: 10px 0;
-            padding: 10px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        a {
-            margin: 0 5px;
-            color: #007BFF;
-            text-decoration: none;
-        }
-        a:hover {
-            text-decoration: underline;
-        }
-        form.inline {
-            display: inline;
-        }
-        input[name="name"] {
-            width: 120px;
-        }
+        a:hover, button:hover { background: #0056b3; }
+        .done { color: green; }
+        .active { color: red; }
+        .paused { color: orange; }
     </style>
 </head>
 <body>
-    <h1>טיימר משימות ⏱️</h1>
+    <h1>⏱ טיימר משימות</h1>
 
-    <form action="/add" method="POST">
-        <input type="text" name="name" placeholder="שם משימה חדשה" required>
-        <button type="submit">➕ הוסף</button>
+    <form method="POST" action="{{ url_for('add_task') }}">
+        <input type="text" name="name" placeholder="שם משימה" required>
+        <input type="number" name="duration" placeholder="זמן (דקות)" required>
+        <button type="submit">➕ הוסף משימה</button>
     </form>
 
+    <h2>📋 רשימת משימות</h2>
     <ul>
-        {% for task in tasks %}
+    {% for task in tasks %}
         <li>
-            <b>{{ task.name }}</b> - {{ task.status }}
-            {% if task.status == "ממתינה" %}
-                <a href="/start/{{task.id}}">▶️ התחל</a>
-            {% elif task.status == "פעילה" %}
-                <a href="/pause/{{task.id}}">⏸️ השהה</a>
-                <a href="/finish/{{task.id}}">✅ סיים</a>
-            {% elif task.status == "מושהית" %}
-                <a href="/start/{{task.id}}">▶️ המשך</a>
-                <a href="/finish/{{task.id}}">✅ סיים</a>
+            <b>{{ task.name }}</b>
+            {% if task.duration_minutes %}
+                (⏱ {{ task.duration_minutes }} דקות)
             {% endif %}
-            <form action="/edit/{{task.id}}" method="POST" class="inline">
-                <input type="text" name="name" placeholder="שם חדש">
-                <button type="submit">✏️ שנה</button>
-            </form>
-            <a href="/delete/{{task.id}}">🗑️ מחק</a>
+            - 
+            {% if task.status == "פעילה" %}
+                <span class="active">פעילה</span>
+            {% elif task.status == "מושהית" %}
+                <span class="paused">מושהית</span>
+            {% elif task.status == "הסתיימה" %}
+                <span class="done">הסתיימה</span>
+            {% else %}
+                <span>ממתינה</span>
+            {% endif %}
+
+            {% if task.start_time and task.end_time %}
+                <br>⏳ מתחיל ב: {{ task.start_time.strftime("%H:%M") }}
+                | 🕒 מסתיים ב: {{ task.end_time.strftime("%H:%M") }}
+            {% endif %}
+
+            <div>
+                {% if task.status == "ממתינה" %}
+                    <a href="{{ url_for('start_task', task_id=task.id) }}">▶️ התחל</a>
+                {% elif task.status == "פעילה" %}
+                    <a href="{{ url_for('pause_task', task_id=task.id) }}">⏸ השהה</a>
+                    <a href="{{ url_for('finish_task', task_id=task.id) }}">⏹ סיים</a>
+                {% elif task.status == "מושהית" %}
+                    <a href="{{ url_for('resume_task', task_id=task.id) }}">▶️ המשך</a>
+                    <a href="{{ url_for('finish_task', task_id=task.id) }}">⏹ סיים</a>
+                {% endif %}
+            </div>
         </li>
-        {% endfor %}
+    {% endfor %}
     </ul>
 </body>
 </html>
