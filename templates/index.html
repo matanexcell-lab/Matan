@@ -1,70 +1,41 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="he">
 <head>
     <meta charset="UTF-8">
-    <title>⏱ טיימר משימות</title>
+    <title>טיימר משימות ⏱</title>
     <style>
-        body { font-family: Arial, sans-serif; direction: rtl; margin: 40px; }
-        h1 { color: #333; }
-        form { margin-bottom: 20px; }
-        input { padding: 5px; margin: 5px; }
-        button, a {
-            padding: 5px 10px; margin: 2px;
-            background: #007bff; color: white;
-            text-decoration: none; border-radius: 4px;
-        }
-        a:hover, button:hover { background: #0056b3; }
-        .done { color: green; }
-        .active { color: red; }
-        .paused { color: orange; }
+        body { font-family: Arial, sans-serif; text-align: center; direction: rtl; }
+        .task { margin: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
+        button { margin: 2px; }
     </style>
 </head>
 <body>
-    <h1>⏱ טיימר משימות</h1>
+    <h1>טיימר משימות ⏱</h1>
 
-    <form method="POST" action="{{ url_for('add_task') }}">
+    <form action="/add" method="post">
         <input type="text" name="name" placeholder="שם משימה" required>
-        <input type="number" name="duration" placeholder="זמן (דקות)" required>
+        <input type="number" name="minutes" placeholder="דקות" min="0">
+        <input type="number" name="seconds" placeholder="שניות" min="0" max="59">
         <button type="submit">➕ הוסף משימה</button>
     </form>
 
-    <h2>📋 רשימת משימות</h2>
-    <ul>
+    <h2>רשימת משימות 📝</h2>
     {% for task in tasks %}
-        <li>
-            <b>{{ task.name }}</b>
-            {% if task.duration_minutes %}
-                (⏱ {{ task.duration_minutes }} דקות)
-            {% endif %}
-            - 
-            {% if task.status == "פעילה" %}
-                <span class="active">פעילה</span>
-            {% elif task.status == "מושהית" %}
-                <span class="paused">מושהית</span>
-            {% elif task.status == "הסתיימה" %}
-                <span class="done">הסתיימה</span>
-            {% else %}
-                <span>ממתינה</span>
-            {% endif %}
-
-            {% if task.start_time and task.end_time %}
-                <br>⏳ מתחיל ב: {{ task.start_time.strftime("%H:%M") }}
-                | 🕒 מסתיים ב: {{ task.end_time.strftime("%H:%M") }}
-            {% endif %}
-
-            <div>
-                {% if task.status == "ממתינה" %}
-                    <a href="{{ url_for('start_task', task_id=task.id) }}">▶️ התחל</a>
-                {% elif task.status == "פעילה" %}
-                    <a href="{{ url_for('pause_task', task_id=task.id) }}">⏸ השהה</a>
-                    <a href="{{ url_for('finish_task', task_id=task.id) }}">⏹ סיים</a>
-                {% elif task.status == "מושהית" %}
-                    <a href="{{ url_for('resume_task', task_id=task.id) }}">▶️ המשך</a>
-                    <a href="{{ url_for('finish_task', task_id=task.id) }}">⏹ סיים</a>
-                {% endif %}
-            </div>
-        </li>
+        <div class="task">
+            <b>{{ task.name }}</b> – 
+            מצב: {{ task.status }} <br>
+            זמן שנשאר: {{ task.remaining_time() // 60 }}:{{ "%02d"|format(task.remaining_time() % 60) }} דקות <br>
+            <a href="/start/{{task.id}}"><button>▶️ התחל</button></a>
+            <a href="/pause/{{task.id}}"><button>⏸ השהה</button></a>
+            <a href="/resume/{{task.id}}"><button>⏯ המשך</button></a>
+            <a href="/finish/{{task.id}}"><button>✅ סיים</button></a>
+            <form action="/edit/{{task.id}}" method="post" style="display:inline;">
+                <input type="text" name="name" placeholder="שם חדש">
+                <input type="number" name="minutes" placeholder="דקות" min="0">
+                <input type="number" name="seconds" placeholder="שניות" min="0" max="59">
+                <button type="submit">✏️ ערוך</button>
+            </form>
+        </div>
     {% endfor %}
-    </ul>
 </body>
 </html>
