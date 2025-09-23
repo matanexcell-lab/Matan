@@ -3,49 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <title>⏱️ טיימר משימות</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            direction: rtl;
-            background: #f9f9f9;
-            padding: 20px;
-        }
-        h1, h2 {
-            text-align: center;
-        }
-        form {
-            margin: 20px auto;
-            text-align: center;
-        }
-        input, button {
-            margin: 5px;
-            padding: 5px 10px;
-        }
-        ul {
-            list-style: none;
-            padding: 0;
-            max-width: 600px;
-            margin: auto;
-        }
-        li {
-            background: #fff;
-            margin: 10px 0;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .task-actions a {
-            margin-left: 10px;
-            text-decoration: none;
-            padding: 5px 8px;
-            border-radius: 5px;
-            font-size: 14px;
-        }
-        .start { background: #4caf50; color: #fff; }
-        .pause { background: #ff9800; color: #fff; }
-        .resume { background: #2196f3; color: #fff; }
-        .finish { background: #f44336; color: #fff; }
-    </style>
+    <!-- חיבור ל־CSS חיצוני -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
     <script>
         function startCountdown(taskId, duration) {
             let display = document.getElementById("timer-" + taskId);
@@ -56,7 +15,6 @@
                 if (diff <= 0) {
                     display.textContent = "00:00:00";
                     clearInterval(timer);
-                    // אחרי סיום משימה – מפעיל את המשימה הבאה
                     fetch("/finish/" + taskId).then(() => {
                         window.location.href = "/start_next";
                     });
