@@ -1,41 +1,96 @@
- {
+body {
     font-family: Arial, sans-serif;
+    text-align: center;
     direction: rtl;
-    background: #f9f9f9;
-    padding: 20px;
-}
-h1, h2 {
-    text-align: center;
-}
-form {
-    margin: 20px auto;
-    text-align: center;
-}
-input, button {
-    margin: 5px;
-    padding: 5px 10px;
-}
-ul {
-    list-style: none;
+    background-color: #f4f6f9;
+    margin: 0;
     padding: 0;
-    max-width: 600px;
-    margin: auto;
 }
-li {
-    background: #fff;
-    margin: 10px 0;
-    padding: 15px;
-    border-radius: 8px;
-    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+
+h1 {
+    color: #2c3e50;
+    margin-top: 20px;
 }
-.task-actions a {
-    margin-left: 10px;
-    text-decoration: none;
-    padding: 5px 8px;
-    border-radius: 5px;
+
+form {
+    margin: 20px 0;
+}
+
+input, button {
+    padding: 8px 10px;
+    margin: 4px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
     font-size: 14px;
 }
-.start { background: #4caf50; color: #fff; }
-.pause { background: #ff9800; color: #fff; }
-.resume { background: #2196f3; color: #fff; }
-.finish { background: #f44336; color: #fff; }
+
+button {
+    cursor: pointer;
+    transition: 0.2s;
+}
+
+button:hover {
+    opacity: 0.85;
+}
+
+button[type="submit"] {
+    background-color: #3498db;
+    color: white;
+    border: none;
+}
+
+table {
+    margin: 20px auto;
+    border-collapse: collapse;
+    width: 85%;
+    background: white;
+    box-shadow: 0 0 10px rgba(0,0,0,0.1);
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+th, td {
+    border: 1px solid #ddd;
+    padding: 10px;
+    text-align: center;
+    font-size: 14px;
+}
+
+th {
+    background: #ecf0f1;
+    font-weight: bold;
+}
+
+tr:nth-child(even) {
+    background: #f9f9f9;
+}
+
+.actions form {
+    display: inline;
+}
+
+.actions button {
+    margin: 2px;
+    padding: 6px 8px;
+    border-radius: 5px;
+}
+
+.actions .start-btn {
+    background: #27ae60;
+    color: white;
+}
+
+.actions .stop-btn {
+    background: #e67e22;
+    color: white;
+}
+
+.actions .done-btn {
+    background: #2980b9;
+    color: white;
+}
+
+.actions .delete-btn {
+    background: #c0392b;
+    color: white;
+}
