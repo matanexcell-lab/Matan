@@ -6,6 +6,7 @@
     <style>
         body { font-family: Arial, sans-serif; background:#f8f8f8; margin:20px; }
         h1 { text-align:center; }
+        p { text-align:center; }
         table { width:100%; border-collapse:collapse; margin-top:20px; background:white; }
         th, td { border:1px solid #ccc; padding:8px; text-align:center; }
         th { background:#eee; }
@@ -48,7 +49,7 @@
     {% for task in tasks %}
     <tr class="{% if task.status=='רץ' %}running{% elif task.status=='הסתיים' %}finished{% elif task.status=='עצורה' %}paused{% endif %}">
         <td>
-            <!-- טופס עריכה -->
+            <!-- עריכת משימה -->
             <form action="{{ url_for('edit_task', task_id=task.id) }}" method="post">
                 <input type="text" name="name" value="{{ task.name }}">
                 <input type="number" name="hours" min="0" value="{{ task.duration // 3600 }}">
