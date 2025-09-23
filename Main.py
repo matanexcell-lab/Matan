@@ -23,6 +23,14 @@ with app.app_context():
     db.create_all()
 
 
+def safe_int(value):
+    """המרה בטוחה למספר שלם (אם ריק או לא חוקי → 0)"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def update_task_status(task):
     """בודקת אם משימה הסתיימה ומעדכנת בהתאם"""
     now = datetime.utcnow()
@@ -56,9 +64,9 @@ def index():
 @app.route("/add", methods=["POST"])
 def add_task():
     name = request.form["name"]
-    hours = int(request.form.get("hours", 0))
-    minutes = int(request.form.get("minutes", 0))
-    seconds = int(request.form.get("seconds", 0))
+    hours = safe_int(request.form.get("hours"))
+    minutes = safe_int(request.form.get("minutes"))
+    seconds = safe_int(request.form.get("seconds"))
     duration = hours * 3600 + minutes * 60 + seconds
 
     if duration <= 0:
@@ -139,9 +147,9 @@ def delete_task(task_id):
 def edit_task(task_id):
     task = Task.query.get_or_404(task_id)
     task.name = request.form["name"]
-    hours = int(request.form.get("hours", 0))
-    minutes = int(request.form.get("minutes", 0))
-    seconds = int(request.form.get("seconds", 0))
+    hours = safe_int(request.form.get("hours"))
+    minutes = safe_int(request.form.get("minutes"))
+    seconds = safe_int(request.form.get("seconds"))
     task.duration = hours * 3600 + minutes * 60 + seconds
     task.remaining = task.duration
     task.status = "ממתינה"
