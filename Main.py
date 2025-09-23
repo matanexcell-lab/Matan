@@ -22,10 +22,14 @@ class Task(db.Model):
 with app.app_context():
     db.create_all()
 
+# פונקציה למציאת המשימה הבאה
+def get_next_task(current_id):
+    return Task.query.filter(Task.id > current_id, Task.status == "pending").order_by(Task.id.asc()).first()
+
 # דף ראשי
 @app.route('/')
 def index():
-    tasks = Task.query.order_by(Task.id.asc()).all()  # משימות לפי סדר יצירה
+    tasks = Task.query.order_by(Task.id.asc()).all()
     total_end_time = None
 
     if tasks:
@@ -33,11 +37,11 @@ def index():
         total_duration = timedelta()
 
         for task in tasks:
-            total_duration += timedelta(
-                hours=task.hours,
-                minutes=task.minutes,
-                seconds=task.seconds
-            )
+            if task.status in ["pending", "paused"]:
+                total_duration += timedelta(hours=task.hours, minutes=task.minutes, seconds=task.seconds)
+            elif task.status == "running" and task.end_time:
+                total_duration += (task.end_time - current_time)
+
         total_end_time = (current_time + total_duration).strftime("%H:%M:%S")
 
     return render_template("index.html", tasks=tasks, total_end_time=total_end_time)
@@ -59,12 +63,17 @@ def add_task():
 @app.route('/start/<int:task_id>')
 def start_task(task_id):
     task = Task.query.get_or_404(task_id)
+
+    # בדיקה שאין משימה אחרת פעילה
+    running_task = Task.query.filter_by(status="running").first()
+    if running_task and running_task.id != task_id:
+        return redirect(url_for('index'))
+
     if task.status in ["pending", "paused"]:
         task.status = "running"
-        task.start_time = datetime.now(ZoneInfo("Asia/Jerusalem"))
-        task.end_time = task.start_time + timedelta(
-            hours=task.hours, minutes=task.minutes, seconds=task.seconds
-        )
+        now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        task.start_time = now
+        task.end_time = now + timedelta(hours=task.hours, minutes=task.minutes, seconds=task.seconds)
         db.session.commit()
     return redirect(url_for('index'))
 
@@ -77,9 +86,10 @@ def pause_task(task_id):
         now = datetime.now(ZoneInfo("Asia/Jerusalem"))
         if task.end_time:
             remaining = task.end_time - now
-            task.hours = max(0, remaining.seconds // 3600)
-            task.minutes = max(0, (remaining.seconds % 3600) // 60)
-            task.seconds = max(0, remaining.seconds % 60)
+            if remaining.total_seconds() > 0:
+                task.hours = remaining.seconds // 3600
+                task.minutes = (remaining.seconds % 3600) // 60
+                task.seconds = remaining.seconds % 60
         db.session.commit()
     return redirect(url_for('index'))
 
@@ -89,6 +99,16 @@ def finish_task(task_id):
     task = Task.query.get_or_404(task_id)
     task.status = "finished"
     db.session.commit()
+
+    # התחלת המשימה הבאה ברצף
+    next_task = get_next_task(task_id)
+    if next_task:
+        next_task.status = "running"
+        now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+        next_task.start_time = now
+        next_task.end_time = now + timedelta(hours=next_task.hours, minutes=next_task.minutes, seconds=next_task.seconds)
+        db.session.commit()
+
     return redirect(url_for('index'))
 
 # מחיקת משימה
@@ -114,14 +134,25 @@ def edit_task(task_id):
 @app.route('/remaining/<int:task_id>')
 def remaining_time(task_id):
     task = Task.query.get_or_404(task_id)
+    now = datetime.now(ZoneInfo("Asia/Jerusalem"))
+
     if task.status == "running" and task.end_time:
-        now = datetime.now(ZoneInfo("Asia/Jerusalem"))
         remaining = task.end_time - now
         if remaining.total_seconds() <= 0:
             task.status = "finished"
             db.session.commit()
+
+            # להתחיל את המשימה הבאה
+            next_task = get_next_task(task.id)
+            if next_task:
+                next_task.status = "running"
+                next_task.start_time = now
+                next_task.end_time = now + timedelta(hours=next_task.hours, minutes=next_task.minutes, seconds=next_task.seconds)
+                db.session.commit()
+
             return jsonify({"time": "00:00:00", "status": "finished"})
-        return jsonify({"time": str(remaining), "status": task.status})
+        return jsonify({"time": str(remaining).split(".")[0], "status": task.status})
+
     return jsonify({"time": f"{task.hours:02d}:{task.minutes:02d}:{task.seconds:02d}", "status": task.status})
 
 if __name__ == "__main__":
