@@ -30,12 +30,12 @@ class Task(db.Model):
     duration = db.Column(db.Integer, default=0)  # בשניות
     status = db.Column(db.String(50), default="ממתינה")
     start_time = db.Column(db.DateTime, nullable=True)
+    end_time = db.Column(db.DateTime, nullable=True)
 
     def remaining_seconds(self):
-        if self.status == "פעילה" and self.start_time:
-            elapsed = (datetime.utcnow() - self.start_time).total_seconds()
-            remaining = max(0, self.duration - int(elapsed))
-            return remaining
+        if self.status == "פעילה" and self.end_time:
+            remaining = (self.end_time - datetime.utcnow()).total_seconds()
+            return max(0, int(remaining))
         return self.duration
 
     def remaining_time(self):
@@ -46,13 +46,47 @@ with app.app_context():
     db.create_all()
 
 
+# === פונקציה שבודקת אם משימה הסתיימה ומפעילה את הבאה ===
+def check_and_update_tasks():
+    active_task = Task.query.filter_by(status="פעילה").first()
+    if active_task and active_task.end_time and datetime.utcnow() >= active_task.end_time:
+        # המשימה הסתיימה
+        active_task.status = "הסתיימה"
+        active_task.duration = 0
+        active_task.start_time = None
+        active_task.end_time = None
+        db.session.commit()
+
+        # הפעלה אוטומטית של המשימה הבאה
+        next_task = Task.query.filter_by(status="ממתינה").order_by(Task.id).first()
+        if next_task:
+            next_task.status = "פעילה"
+            next_task.start_time = datetime.utcnow()
+            next_task.end_time = next_task.start_time + timedelta(seconds=next_task.duration)
+            db.session.commit()
+
+
 # === ראוטים ===
 @app.route("/")
 def index():
+    check_and_update_tasks()
     tasks = Task.query.order_by(Task.id).all()
     edit_id = request.args.get("edit")
     edit_task = Task.query.get(edit_id) if edit_id else None
-    return render_template("index.html", tasks=tasks, edit_task=edit_task)
+
+    # חישוב מתי כל המשימות צפויות להסתיים
+    total_end_time = None
+    if tasks:
+        current_time = datetime.utcnow()
+        for t in tasks:
+            if t.status == "פעילה" and t.end_time:
+                current_time = t.end_time
+            elif t.status == "ממתינה" and t.duration > 0:
+                current_time += timedelta(seconds=t.duration)
+        if current_time:
+            total_end_time = current_time.strftime("%H:%M:%S")
+
+    return render_template("index.html", tasks=tasks, edit_task=edit_task, total_end_time=total_end_time)
 
 
 @app.route("/add", methods=["POST"])
@@ -76,6 +110,7 @@ def start_task(task_id):
     if task:
         task.status = "פעילה"
         task.start_time = datetime.utcnow()
+        task.end_time = task.start_time + timedelta(seconds=task.duration)
         db.session.commit()
     return redirect(url_for("index"))
 
@@ -88,17 +123,7 @@ def stop_task(task_id):
         task.duration = int(remaining)
         task.status = "מושהית"
         task.start_time = None
-        db.session.commit()
-    return redirect(url_for("index"))
-
-
-@app.route("/done/<int:task_id>", methods=["POST"])
-def done_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
-        task.status = "הסתיימה"
-        task.duration = 0
-        task.start_time = None
+        task.end_time = None
         db.session.commit()
     return redirect(url_for("index"))
 
@@ -128,5 +153,6 @@ def update_task(task_id):
             task.duration = total_seconds
         task.status = "ממתינה"
         task.start_time = None
+        task.end_time = None
         db.session.commit()
     return redirect(url_for("index"))
