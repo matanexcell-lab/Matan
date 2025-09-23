@@ -2,84 +2,121 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>טיימר משימות ⏱️</title>
+    <title>טיימר משימות</title>
     <style>
-        body { font-family: Arial, sans-serif; background: #f8f9fa; text-align: center; padding: 20px; }
-        h1 { color: #333; }
-        form { margin: 15px auto; padding: 10px; background: #fff; border: 1px solid #ccc; border-radius: 8px; display: inline-block; }
-        label { margin: 0 5px; font-weight: bold; }
-        input { width: 60px; text-align: center; margin: 5px; }
-        button { margin: 5px; padding: 6px 12px; border: none; border-radius: 4px; background: #007bff; color: white; cursor: pointer; }
-        button:hover { background: #0056b3; }
-        ul { list-style: none; padding: 0; max-width: 700px; margin: 20px auto; text-align: right; }
-        li { background: #fff; border: 1px solid #ddd; margin: 8px 0; padding: 12px; border-radius: 6px; }
-        .actions a, .actions form { display: inline-block; margin: 0 5px; }
+        body { font-family: Arial, sans-serif; background:#f8f8f8; margin:20px; }
+        h1 { text-align:center; }
+        table { width:100%; border-collapse:collapse; margin-top:20px; background:white; }
+        th, td { border:1px solid #ccc; padding:8px; text-align:center; }
+        th { background:#eee; }
+        button { margin:2px; padding:5px 10px; }
+        form.inline { display:inline; }
+        .finished { background:#d3ffd3; }
+        .running { background:#fff7cc; }
+        .paused { background:#fdd; }
     </style>
 </head>
 <body>
-    <h1>טיימר משימות ⏱️</h1>
 
-    <!-- טופס הוספת משימה -->
-    <form action="{{ url_for('add_task') }}" method="post">
-        <input type="text" name="name" placeholder="שם משימה" required>
-        <label>שעות</label><input type="number" name="hours" min="0" value="0">
-        <label>דקות</label><input type="number" name="minutes" min="0" value="0">
-        <label>שניות</label><input type="number" name="seconds" min="0" value="0">
-        <button type="submit">➕ הוסף משימה</button>
-    </form>
+<h1>⏱️ טיימר משימות</h1>
 
-    <h2>📋 רשימת משימות</h2>
-    {% if tasks %}
-        <ul>
-            {% for task in tasks %}
-                <li>
-                    <strong>{{ task.name }}</strong><br>
-                    סטטוס: {{ task.status }}<br>
-                    זמן נותר:
-                    <span data-endtime="{{ task.end_time.isoformat() if task.end_time else '' }}">
-                        {{ task.formatted_remaining() }}
-                    </span><br>
-                    שעת סיום: {% if task.end_time %}{{ task.end_time.strftime("%H:%M:%S") }}{% else %}—{% endif %}
+{% if total_end_time %}
+<p><strong>🕒 כל המשימות צפויות להסתיים בשעה:</strong> {{ total_end_time }}</p>
+{% endif %}
 
-                    <div class="actions">
-                        <a href="{{ url_for('start_task', task_id=task.id) }}"><button type="button">▶️ התחל</button></a>
-                        <a href="{{ url_for('pause_task', task_id=task.id) }}"><button type="button">⏸️ עצור</button></a>
-                        <a href="{{ url_for('reset_task', task_id=task.id) }}"><button type="button">🔄 אפס</button></a>
-                        <a href="{{ url_for('finish_task', task_id=task.id) }}"><button type="button">✅ סיים</button></a>
-                        <a href="{{ url_for('delete_task', task_id=task.id) }}"><button type="button">🗑️ מחק</button></a>
-                    </div>
+<!-- טופס הוספת משימה -->
+<form action="{{ url_for('add_task') }}" method="post">
+    <input type="text" name="name" placeholder="שם משימה" required>
+    <label>שעות:</label>
+    <input type="number" name="hours" min="0" value="0">
+    <label>דקות:</label>
+    <input type="number" name="minutes" min="0" value="0">
+    <label>שניות:</label>
+    <input type="number" name="seconds" min="0" value="0">
+    <button type="submit">➕ הוסף משימה</button>
+</form>
 
-                    <!-- טופס עריכה -->
-                    <form action="{{ url_for('edit_task', task_id=task.id) }}" method="post" style="margin-top:10px;">
-                        <input type="text" name="name" value="{{ task.name }}" required>
-                        <label>שעות</label><input type="number" name="hours" min="0" value="{{ task.duration // 3600 }}">
-                        <label>דקות</label><input type="number" name="minutes" min="0" value="{{ (task.duration % 3600) // 60 }}">
-                        <label>שניות</label><input type="number" name="seconds" min="0" value="{{ task.duration % 60 }}">
-                        <button type="submit">✏️ ערוך</button>
-                    </form>
-                </li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>🚀 אין משימות כרגע</p>
-    {% endif %}
+<!-- טבלת משימות -->
+<table>
+    <tr>
+        <th>שם משימה</th>
+        <th>סטטוס</th>
+        <th>נותר</th>
+        <th>שעת סיום</th>
+        <th>פעולות</th>
+    </tr>
+    {% for task in tasks %}
+    <tr class="{% if task.status=='רץ' %}running{% elif task.status=='הסתיים' %}finished{% elif task.status=='עצורה' %}paused{% endif %}">
+        <td>
+            <!-- טופס עריכה -->
+            <form action="{{ url_for('edit_task', task_id=task.id) }}" method="post">
+                <input type="text" name="name" value="{{ task.name }}">
+                <input type="number" name="hours" min="0" value="{{ task.duration // 3600 }}">
+                <input type="number" name="minutes" min="0" value="{{ (task.duration % 3600) // 60 }}">
+                <input type="number" name="seconds" min="0" value="{{ task.duration % 60 }}">
+                <button type="submit">💾</button>
+            </form>
+        </td>
+        <td>{{ task.status }}</td>
+        <td>
+            <span class="countdown"
+                  data-remaining="{{ task.remaining() }}">
+                  {{ task.formatted_remaining() }}
+            </span>
+        </td>
+        <td>
+            {% if task.status == "רץ" and task.end_time %}
+                {{ task.end_time.strftime("%H:%M:%S") }}
+            {% elif task.status == "הסתיים" %}
+                ✅ הסתיים
+            {% else %}
+                ⏳ ממתין
+            {% endif %}
+        </td>
+        <td>
+            <form action="{{ url_for('start_task', task_id=task.id) }}" method="get" class="inline">
+                <button type="submit">▶️ התחל</button>
+            </form>
+            <form action="{{ url_for('pause_task', task_id=task.id) }}" method="get" class="inline">
+                <button type="submit">⏸️ השהה</button>
+            </form>
+            <form action="{{ url_for('reset_task', task_id=task.id) }}" method="get" class="inline">
+                <button type="submit">🔄 אפס</button>
+            </form>
+            <form action="{{ url_for('finish_task', task_id=task.id) }}" method="get" class="inline">
+                <button type="submit">✅ סיים</button>
+            </form>
+            <form action="{{ url_for('delete_task', task_id=task.id) }}" method="get" class="inline">
+                <button type="submit">🗑️ מחק</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+</table>
 
-    <!-- ספירה לאחור חיה -->
-    <script>
-    function updateCountdowns() {
-        document.querySelectorAll("[data-endtime]").forEach(el => {
-            if (!el.dataset.endtime) return;
-            let end = new Date(el.dataset.endtime).getTime();
-            let now = new Date().getTime();
-            let diff = Math.max(0, Math.floor((end - now) / 1000));
+<!-- JS לספירה לאחור -->
+<script>
+function updateCountdowns() {
+    document.querySelectorAll(".countdown").forEach(el => {
+        let remaining = parseInt(el.dataset.remaining);
+        if (isNaN(remaining)) return;
 
-            let h = Math.floor(diff / 3600);
-            let m = Math.floor((diff % 3600) / 60);
-            let s = diff % 60;
-            el.textContent = `${h.toString().padStart(2,"0")}:${m.toString().padStart(2,"0")}:${s.toString().padStart(2,"0")}`;
-        });
-    }
-    setInterval(updateCountdowns, 1000);
-    </script>
+        if (remaining > 0) {
+            remaining -= 1;
+            el.dataset.remaining = remaining;
+
+            let h = Math.floor(remaining / 3600);
+            let m = Math.floor((remaining % 3600) / 60);
+            let s = remaining % 60;
+            el.textContent = 
+                h.toString().padStart(2,"0")+":"+
+                m.toString().padStart(2,"0")+":"+
+                s.toString().padStart(2,"0");
+        }
+    });
+}
+setInterval(updateCountdowns, 1000);
+</script>
+
 </body>
 </html>
