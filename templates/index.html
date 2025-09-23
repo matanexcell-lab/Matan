@@ -1,114 +1,152 @@
 <!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <title>טיימר משימות</title>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <style>
-        body { font-family: Arial, sans-serif; direction: rtl; text-align: center; margin: 20px; }
-        table { border-collapse: collapse; width: 95%; margin: auto; }
-        th, td { border: 1px solid #333; padding: 6px; }
-        th { background: #eee; }
-        button { margin: 2px; }
-        .input-row { margin: 20px; }
-        .input-row input { width: 60px; text-align: center; }
-        #overallEnd { margin: 20px; font-weight: bold; font-size: 18px; }
-        input.edit-time { width: 40px; }
-    </style>
+  <meta charset="UTF-8">
+  <title>טיימר משימות</title>
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <style>
+    body{font-family:Arial,Helvetica,sans-serif;direction:rtl;text-align:center;margin:20px}
+    table{border-collapse:collapse;width:95%;margin:auto}
+    th,td{border:1px solid #333;padding:6px}
+    th{background:#eee}
+    button{margin:2px}
+    .input-row{margin:12px}
+    .input-row input{width:70px;text-align:center}
+    .edit-time{width:48px;text-align:center}
+    #overallEnd{margin:10px 0;font-weight:bold;font-size:18px}
+    .muted{opacity:.6}
+  </style>
 </head>
 <body>
-    <h2>טיימר משימות</h2>
+  <h2>טיימר משימות</h2>
 
-    <div class="input-row">
-        <form id="taskForm">
-            שם משימה: <input type="text" name="name" value="משימה חדשה">
-            שעות: <input type="number" name="hours" min="0" value="0">
-            דקות: <input type="number" name="minutes" min="0" value="0">
-            שניות: <input type="number" name="seconds" min="0" value="0">
-            <button type="submit">➕ הוסף</button>
-        </form>
-    </div>
+  <div class="input-row">
+    <form id="addForm">
+      שם משימה: <input type="text" name="name" value="משימה חדשה" />
+      שעות: <input type="number" name="hours" min="0" value="0" />
+      דקות: <input type="number" name="minutes" min="0" value="0" />
+      שניות: <input type="number" name="seconds" min="0" value="0" />
+      <button type="submit">➕ הוסף</button>
+    </form>
+  </div>
 
-    <div id="overallEnd"></div>
+  <div id="overallEnd">שעת סיום כוללת: --:--:--</div>
 
-    <table>
-        <thead>
-            <tr>
-                <th>שם</th>
-                <th>סטטוס</th>
-                <th>זמן התחלתי</th>
-                <th>שעת סיום</th>
-                <th>נותר</th>
-                <th>פעולות</th>
+  <table>
+    <thead>
+      <tr>
+        <th>שם</th>
+        <th>סטטוס</th>
+        <th>זמן התחלתי</th>
+        <th>שעת סיום</th>
+        <th>נותר</th>
+        <th>פעולות</th>
+      </tr>
+    </thead>
+    <tbody id="taskBody"></tbody>
+  </table>
+
+  <script>
+    // כשעורכים שדה – לא לדרוס אותו מכל רענון
+    const editing = new Set(); // "row-input-<id>-<field>"
+
+    function key(id, field){ return `row-input-${id}-${field}`; }
+
+    function start(id){ $.post(`/start/${id}`, ()=>refresh()); }
+    function pause(id){ $.post(`/pause/${id}`, ()=>refresh()); }
+    function resetTask(id){ $.post(`/reset/${id}`, ()=>refresh()); }
+    function delTask(id){ $.get(`/delete/${id}`, ()=>refresh()); }
+
+    function saveName(id){
+      const $inp = $(`#name-${id}`);
+      const val = $inp.val();
+      $.post(`/edit/${id}`, {name: val}, ()=>refresh());
+    }
+
+    function saveTime(id){
+      const h = $(`#h-${id}`).val() || 0;
+      const m = $(`#m-${id}`).val() || 0;
+      const s = $(`#s-${id}`).val() || 0;
+      const nm = $(`#name-${id}`).val() || "";
+      $.post(`/edit/${id}`, {name:nm, hours:h, minutes:m, seconds:s}, ()=>refresh());
+    }
+
+    function bindFreeze($el, id, field){
+      const k = key(id, field);
+      $el.on("focus", ()=>editing.add(k));
+      $el.on("blur",  ()=>editing.delete(k));
+      // אם לוחצים Enter בתוך השדות – לא תתבצע שליחה/רענון אוטומטי
+      $el.on("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); $el.blur(); }});
+    }
+
+    function refresh(){
+      $.getJSON("/state", function(resp){
+        $("#overallEnd").text("שעת סיום כוללת: " + resp.overall_end);
+        const $tb = $("#taskBody").empty();
+
+        resp.tasks.forEach(t=>{
+          const running = (t.status === "רץ");
+          const row = $(`
+            <tr id="row-${t.id}">
+              <td>
+                ${running
+                  ? `<span class="muted">${t.name}</span>`
+                  : `<input id="name-${t.id}" type="text" value="${t.name}" />`
+                }
+              </td>
+              <td>${t.status}</td>
+              <td>${t.initial}</td>
+              <td>${t.end_time || ""}</td>
+              <td>${t.remaining}</td>
+              <td>
+                <button onclick="start(${t.id})">▶️ התחל</button>
+                <button onclick="pause(${t.id})">⏸️ השהה</button>
+                <button onclick="resetTask(${t.id})">🔄 איפוס</button>
+                <button onclick="delTask(${t.id})">🗑️ מחק</button>
+                <div ${running ? 'class="muted"': ""} style="margin-top:6px">
+                  שעות: <input id="h-${t.id}" class="edit-time" type="number" min="0">
+                  דקות: <input id="m-${t.id}" class="edit-time" type="number" min="0">
+                  שניות: <input id="s-${t.id}" class="edit-time" type="number" min="0">
+                  <button onclick="saveTime(${t.id})" ${running ? "disabled" : ""}>✏️ עדכן זמן</button>
+                </div>
+              </td>
             </tr>
-        </thead>
-        <tbody id="taskTable"></tbody>
-    </table>
+          `);
 
-    <script>
-        function loadState() {
-            $.get("/state", function(resp) {
-                $("#taskTable").empty();
-                resp.tasks.forEach(function(task) {
-                    let row = "<tr>";
+          $tb.append(row);
 
-                    if (task.status === "רץ") {
-                        row += "<td>" + task.name + "</td>";
-                    } else {
-                        row += "<td><input type='text' value='" + task.name + "' onchange='editTask(" + task.id + ", this, null, null, null)'></td>";
-                    }
+          // קביעת ערכים של שדות העריכה רק אם לא בעיצומו של עריכה ידנית
+          if(!running){
+            const kH = key(t.id,"h"), kM = key(t.id,"m"), kS = key(t.id,"s"), kN = key(t.id,"name");
+            if(!editing.has(kH)) $(`#h-${t.id}`).val(t.editable_hours);
+            if(!editing.has(kM)) $(`#m-${t.id}`).val(t.editable_minutes);
+            if(!editing.has(kS)) $(`#s-${t.id}`).val(t.editable_seconds);
+            if(!editing.has(kN)) $(`#name-${t.id}`).val(t.name);
 
-                    row += "<td>" + task.status + "</td>";
-                    row += "<td>" + task.initial_duration + "</td>";
-                    row += "<td>" + (task.end_time || "") + "</td>";
-                    row += "<td>" + task.remaining + "</td>";
+            bindFreeze($(`#h-${t.id}`), t.id, "h");
+            bindFreeze($(`#m-${t.id}`), t.id, "m");
+            bindFreeze($(`#s-${t.id}`), t.id, "s");
+            bindFreeze($(`#name-${t.id}`), t.id, "name");
 
-                    row += "<td>";
-                    row += "<button onclick='startTask(" + task.id + ")'>▶️ התחל</button>";
-                    row += "<button onclick='pauseTask(" + task.id + ")'>⏸️ השהה</button>";
-                    row += "<button onclick='resetTask(" + task.id + ")'>🔄 איפוס</button>";
-                    row += "<button onclick='deleteTask(" + task.id + ")'>🗑️ מחק</button>";
-                    if (task.status !== "רץ") {
-                        row += "<br>שעות:<input class='edit-time' type='number' min='0' value='0' id='h"+task.id+"'>";
-                        row += " דקות:<input class='edit-time' type='number' min='0' value='0' id='m"+task.id+"'>";
-                        row += " שניות:<input class='edit-time' type='number' min='0' value='0' id='s"+task.id+"'>";
-                        row += "<button onclick='updateTime(" + task.id + ")'>✏️ עדכן זמן</button>";
-                    }
-                    row += "</td>";
-
-                    row += "</tr>";
-                    $("#taskTable").append(row);
-                });
-                $("#overallEnd").text("שעת סיום כוללת: " + resp.overall_end);
-            });
-        }
-
-        function startTask(id) { $.get("/start/" + id, loadState); }
-        function pauseTask(id) { $.get("/pause/" + id, loadState); }
-        function resetTask(id) { $.get("/reset/" + id, loadState); }
-        function deleteTask(id) { $.get("/delete/" + id, loadState); }
-
-        function editTask(id, elem, h, m, s) {
-            const name = $(elem).val();
-            $.post("/edit/" + id, { name: name, hours: h || 0, minutes: m || 0, seconds: s || 0 }, loadState);
-        }
-
-        function updateTime(id) {
-            const h = $("#h"+id).val();
-            const m = $("#m"+id).val();
-            const s = $("#s"+id).val();
-            $.post("/edit/" + id, { name: "", hours: h, minutes: m, seconds: s }, loadState);
-        }
-
-        $("#taskForm").submit(function(e) {
-            e.preventDefault();
-            $.post("/add", $(this).serialize(), function() {
-                loadState();
-            });
+            // שמירת שם גם ב-Change
+            $(`#name-${t.id}`).off("change").on("change", ()=>saveName(t.id));
+          }
         });
+      });
+    }
 
-        setInterval(loadState, 1000);
-        loadState();
-    </script>
+    // הוספת משימה
+    $("#addForm").on("submit", function(e){
+      e.preventDefault();
+      $.post("/add", $(this).serialize(), function(){
+        // אחרי הוספה – הטבלה מתעדכנת, והמשימה החדשה תופיע למטה
+        refresh();
+      });
+    });
+
+    // רענון כל שניה (תצוגה/טיימרים)
+    setInterval(refresh, 1000);
+    refresh();
+  </script>
 </body>
 </html>
