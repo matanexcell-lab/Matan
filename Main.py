@@ -1,227 +1,275 @@
-from flask import Flask, render_template, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
-from sqlalchemy import case
-from datetime import datetime, timedelta
+from __future__ import annotations
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
+from flask import Flask, jsonify, request, send_from_directory, abort
+from flask_sqlalchemy import SQLAlchemy
+import os
 
-app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///tasks.db"
+app = Flask(__name__, static_folder="static", template_folder="templates")
+
+# --- DB setup ---
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///" + os.path.join(BASE_DIR, "tasks.db")
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
 IL_TZ = ZoneInfo("Asia/Jerusalem")
 
-def now_il() -> datetime:
-    return datetime.now(IL_TZ)
-
-# סטטוסים: pending / active / paused / done
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(120), nullable=False)
-    duration = db.Column(db.Integer, nullable=False)            # משך התחלתי (שניות)
-    remaining_seconds = db.Column(db.Integer, nullable=False)    # בזמן pause/לפני התחלה
-    status = db.Column(db.String(16), default="pending")
-    start_time = db.Column(db.DateTime, nullable=True)           # כשהמשימה פעילה
-    end_time = db.Column(db.DateTime, nullable=True)             # כשהמשימה פעילה
+    name = db.Column(db.String(120), nullable=False, default="משימה")
+    duration = db.Column(db.Integer, nullable=False, default=0)   # seconds
+    remaining = db.Column(db.Integer, nullable=False, default=0)  # seconds
+    status = db.Column(db.String(20), nullable=False, default="waiting")  # waiting|running|paused|done
+    order_index = db.Column(db.Integer, nullable=False, default=0)
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)     # UTC
+    finished_at = db.Column(db.DateTime(timezone=True), nullable=True)    # UTC
+    created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: now_utc())
+
+    def as_dict_runtime(self, ref_utc: datetime):
+        """Snapshot including זמן נותר מחושב עכשיו."""
+        rem = self.remaining
+        if self.status == "running" and self.started_at:
+            elapsed = int((ref_utc - self.started_at).total_seconds())
+            rem = max(self.remaining - elapsed, 0)
+
+        # סיום צפוי לכל משימה, אם ממשיכים מידית לפי הסדר
+        return {
+            "id": self.id,
+            "name": self.name,
+            "status": self.status,
+            "order_index": self.order_index,
+            "duration": self.duration,
+            "remaining_now": rem,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at_local": fmt_local(self.finished_at) if self.finished_at else None,
+        }
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+def fmt_local(dt: datetime | None) -> str | None:
+    if not dt:
+        return None
+    return dt.astimezone(IL_TZ).strftime("%H:%M:%S  %d.%m.%Y")
 
 with app.app_context():
     db.create_all()
 
-# ---------- פונקציות עזר ----------
+# ---------- Helpers ----------
 
-def secs(n): return max(int(n), 0)
+def _safe_int(v, default=0):
+    try:
+        if v is None or v == "":
+            return default
+        return int(v)
+    except Exception:
+        return default
 
-def complete_and_chain():
+def _top_runnable_id():
+    """ה-id של המשימה הראשונה מלמעלה שאינה 'done'."""
+    t = Task.query.filter(Task.status != "done").order_by(Task.order_index.asc()).first()
+    return t.id if t else None
+
+def _any_running():
+    return Task.query.filter_by(status="running").first() is not None
+
+def _start_task(task: Task):
+    task.status = "running"
+    task.started_at = now_utc()
+    db.session.commit()
+
+def _finish_task(task: Task):
+    """סיים משימה: סטטוס נשאר 'done', ה-remaining מתאפס חזרה למשך המקורי (כבקשתך)."""
+    task.status = "done"
+    task.finished_at = now_utc()
+    # מחזיר את השעון לערך המקורי, אך לא מתחיל אוטומטית מחדש
+    task.remaining = task.duration
+    task.started_at = None
+    db.session.commit()
+
+def _normalize_chain():
     """
-    מריץ "קידום שרשרת": אם יש משימה פעילה שסיימה – מסמן done
-    ומיד מפעיל את הבאה בתור (אם קיימת). נקרא בכל בקשה.
-    מטפל גם במקרה שהאתר היה סגור זמן רב (לולאה עד שאין מה לקדם).
+    דואג לרצף אוטומטי:
+    - אם יש running שסיים בזמן – מסיים אותו.
+    - אם אין running – מתחיל אוטומטית את המשימה הראשונה במצב 'waiting'.
+      (אם המשימה הראשונה 'paused', לא נתחיל אותה אוטומטית; תידרש לחיצה ידנית).
     """
-    while True:
-        active = Task.query.filter_by(status="active").order_by(Task.id).first()
-        if not active:
-            break
-        if active.end_time and now_il() >= active.end_time:
-            # סיימה
-            active.status = "done"
-            active.start_time = None
-            active.end_time = None
-            active.remaining_seconds = 0
-            db.session.commit()
-            # מפעילים את הבאה (אם יש)
-            nxt = Task.query.filter(Task.status.in_(["pending"])).order_by(Task.id).first()
-            if nxt:
-                nxt.status = "active"
-                nxt.start_time = now_il()
-                nxt.end_time = nxt.start_time + timedelta(seconds=nxt.remaining_seconds)
-                db.session.commit()
-                # ממשיכים לולאה (ייתכן שגם היא כבר הסתיימה אם עבר הרבה זמן)
-                continue
-        break
+    utc = now_utc()
+    running = Task.query.filter_by(status="running").order_by(Task.order_index.asc()).first()
+    if running:
+        elapsed = int((utc - running.started_at).total_seconds()) if running.started_at else 0
+        if elapsed >= running.remaining:
+            _finish_task(running)
 
-def compute_schedule():
+    if not _any_running():
+        first_waiting = Task.query.filter_by(status="waiting").order_by(Task.order_index.asc()).first()
+        if first_waiting:
+            _start_task(first_waiting)
+
+def _recalc_predicted_finish_for_chain(ref_utc: datetime):
     """
-    מחשב לכל משימה: זמן נותר ושעת סיום צפויה (predict),
-    וגם "זמן סיום לכלל המשימות".
+    מחשב לכל משימה שעת סיום צפויה (כאילו ממשיכים מכאן ברצף לפי הסדר).
+    מחזיר dict {task_id: local_end_str} וגם את 'total_finish_local'.
     """
-    tasks = Task.query.order_by(Task.id).all()
-    now = now_il()
-
-    # אם יש פעילה – המצב זורם ממנה; אחרת מתחילים מנקודת הזמן עכשיו
-    pointer = now
-    active = Task.query.filter_by(status="active").order_by(Task.id).first()
-    if active and active.end_time:
-        pointer = max(active.end_time, now)
-
-    result = []
+    tasks = Task.query.order_by(Task.order_index.asc()).all()
+    timeline = ref_utc
+    end_map = {}
     for t in tasks:
-        if t.status == "active" and t.end_time:
-            rem = secs((t.end_time - now).total_seconds())
-            pred = t.end_time
-            pointer = pred
-        elif t.status == "paused":
-            rem = secs(t.remaining_seconds)
-            pred = pointer + timedelta(seconds=rem)
-            pointer = pred
-        elif t.status == "pending":
-            rem = secs(t.duration)
-            pred = pointer + timedelta(seconds=rem)
-            pointer = pred
-        else:  # done
-            rem = 0
-            pred = None
+        # זמן שנותר "כאילו עכשיו"
+        if t.status == "running" and t.started_at:
+            rem = max(t.remaining - int((ref_utc - t.started_at).total_seconds()), 0)
+        elif t.status == "done":
+            # אם יש זמן סיום אמיתי – נציג אותו; לא מקדמים ציר זמן.
+            end_map[t.id] = fmt_local(t.finished_at) if t.finished_at else None
+            continue
+        else:
+            rem = t.remaining
 
-        result.append({
-            "id": t.id,
-            "name": t.name,
-            "status": t.status,
-            "duration": t.duration,
-            "remaining": rem,
-            "start_time": t.start_time.isoformat() if t.start_time else None,
-            "end_time": t.end_time.isoformat() if t.end_time else None,
-            "predicted_end": pred.isoformat() if pred else None
-        })
+        finish = timeline + timedelta(seconds=rem)
+        end_map[t.id] = fmt_local(finish)
+        timeline = finish
 
-    all_end = result and result[-1]["predicted_end"] or None
-    return {"now": now.isoformat(), "tasks": result, "all_end": all_end}
+    total_finish_local = fmt_local(timeline) if tasks else None
+    return end_map, total_finish_local
 
-# ---------- ראוטים ----------
+# ---------- Routes ----------
 
 @app.route("/")
-def index():
-    # רינדור ראשוני – הממשק נטען, הנתונים מגיעים ב-/state
-    return render_template("index.html")
+def root():
+    return send_from_directory(app.template_folder, "index.html")
 
-@app.route("/state")
+@app.route("/state", methods=["GET"])
 def state():
-    complete_and_chain()
-    return jsonify(compute_schedule())
+    # מרענן רצף אוטומטי אם צריך
+    _normalize_chain()
 
-@app.route("/add", methods=["POST"])
+    utc = now_utc()
+    tasks = Task.query.order_by(Task.order_index.asc()).all()
+    data = [t.as_dict_runtime(utc) for t in tasks]
+
+    # הוספת שעת סיום צפויה לכל משימה ולכולן יחד
+    end_map, total_finish_local = _recalc_predicted_finish_for_chain(utc)
+    for d in data:
+        d["predicted_finish_local"] = end_map.get(d["id"])
+
+    return jsonify({
+        "now_utc": utc.isoformat(),
+        "tasks": data,
+        "total_finish_local": total_finish_local
+    })
+
+@app.route("/tasks", methods=["POST"])
 def add_task():
-    complete_and_chain()
-    name = (request.form.get("name") or "").strip() or "משימה"
-    h = int(request.form.get("hours") or 0)
-    m = int(request.form.get("minutes") or 0)
-    s = int(request.form.get("seconds") or 0)
-    duration = h * 3600 + m * 60 + s
-    if duration <= 0:
-        return jsonify({"error": "משך חייב להיות גדול מ-0"}), 400
+    """
+    תומך גם ב-JSON וגם ב-form.
+    מצפה: name, hours, minutes, seconds.
+    """
+    payload = request.get_json(silent=True) or request.form
 
-    t = Task(name=name, duration=duration, remaining_seconds=duration, status="pending")
+    name = (payload.get("name") or "משימה").strip()
+    h = _safe_int(payload.get("hours"), 0)
+    m = _safe_int(payload.get("minutes"), 0)
+    s = _safe_int(payload.get("seconds"), 0)
+
+    duration = max(h * 3600 + m * 60 + s, 0)
+    # לא זורקים שגיאה אם 0; פשוט נאפשר משימה 0 שניות (תסתיים מיידית)
+    next_order = (db.session.query(db.func.max(Task.order_index)).scalar() or 0) + 1
+
+    t = Task(
+        name=name or "משימה",
+        duration=duration,
+        remaining=duration,
+        status="waiting",
+        order_index=next_order
+    )
     db.session.add(t)
     db.session.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "task_id": t.id}), 201
 
-@app.route("/start/<int:task_id>", methods=["POST"])
-def start_task(task_id):
-    complete_and_chain()
-    active = Task.query.filter_by(status="active").first()
-    if active:
-        return jsonify({"error": "כבר יש משימה פעילה"}), 400
+@app.route("/tasks/<int:tid>", methods=["PUT"])
+def edit_task(tid):
+    t = Task.query.get_or_404(tid)
 
-    # מותר להתחיל רק את הראשונה בתור שהיא pending או paused
-    first_waiting = Task.query.filter(Task.status.in_(["paused", "pending"]))\
-                              .order_by(Task.id).first()
-    if not first_waiting or first_waiting.id != task_id:
-        return jsonify({"error": "ניתן להתחיל רק את המשימה הראשונה בתור"}), 400
+    if t.status == "running":
+        return abort(400, description="אי אפשר לערוך משימה בזמן ריצה")
 
-    t = first_waiting
-    t.status = "active"
-    t.start_time = now_il()
-    # אם היתה בהשהיה – משתמשים בזמן שנותר, אחרת בזמן התחלתי
-    rem = t.remaining_seconds if t.remaining_seconds > 0 else t.duration
-    t.end_time = t.start_time + timedelta(seconds=rem)
-    db.session.commit()
-    return jsonify({"ok": True})
+    payload = request.get_json(silent=True) or request.form
+    if "name" in payload:
+        nm = (payload.get("name") or "").strip()
+        if nm:
+            t.name = nm
 
-@app.route("/pause/<int:task_id>", methods=["POST"])
-def pause_task(task_id):
-    complete_and_chain()
-    t = Task.query.get(task_id)
-    if not t or t.status != "active" or not t.end_time:
-        return jsonify({"error": "אין משימה פעילה עם מזהה זה"}), 400
-    t.remaining_seconds = secs((t.end_time - now_il()).total_seconds())
-    t.status = "paused"
-    t.start_time = None
-    t.end_time = None
-    db.session.commit()
-    return jsonify({"ok": True, "remaining": t.remaining_seconds})
-
-@app.route("/reset/<int:task_id>", methods=["POST"])
-def reset_task(task_id):
-    complete_and_chain()
-    t = Task.query.get(task_id)
-    if not t:
-        return jsonify({"error": "Task not found"}), 404
-    if t.status == "active":
-        return jsonify({"error": "עצור/השהה לפני איפוס"}), 400
-    t.status = "pending"
-    t.start_time = None
-    t.end_time = None
-    t.remaining_seconds = t.duration
-    db.session.commit()
-    return jsonify({"ok": True})
-
-@app.route("/edit/<int:task_id>", methods=["POST"])
-def edit_task(task_id):
-    complete_and_chain()
-    t = Task.query.get(task_id)
-    if not t:
-        return jsonify({"error": "Task not found"}), 404
-    if t.status == "active":
-        return jsonify({"error": "אי אפשר לערוך משימה פעילה"}), 400
-
-    data = request.json or {}
-    if "name" in data:
-        t.name = (data["name"] or "").strip() or t.name
-    if {"hours","minutes","seconds"} <= set(data.keys()):
-        h = int(data.get("hours") or 0)
-        m = int(data.get("minutes") or 0)
-        s = int(data.get("seconds") or 0)
-        dur = h*3600 + m*60 + s
-        if dur > 0:
-            t.duration = dur
-            t.remaining_seconds = dur
-            t.start_time = None
-            t.end_time = None
-            if t.status == "done":
-                t.status = "pending"
+    # שעות/דקות/שניות – אם נמסרו, מעדכנים זמן ומאפסים remaining בהתאם
+    supplied_any_time = any(k in payload for k in ("hours", "minutes", "seconds"))
+    if supplied_any_time:
+        h = _safe_int(payload.get("hours"), 0)
+        m = _safe_int(payload.get("minutes"), 0)
+        s = _safe_int(payload.get("seconds"), 0)
+        duration = max(h * 3600 + m * 60 + s, 0)
+        t.duration = duration
+        t.remaining = duration
+        # לא משנים סטטוס 'done' אם היה Done – נשאר Done (לפי בקשתך)
+        t.started_at = None
 
     db.session.commit()
     return jsonify({"ok": True})
 
-@app.route("/delete/<int:task_id>", methods=["DELETE"])
-def delete_task(task_id):
-    complete_and_chain()
-    t = Task.query.get(task_id)
-    if not t:
-        return jsonify({"error": "Task not found"}), 404
-    if t.status == "active":
-        return jsonify({"error": "עצור/השהה לפני מחיקה"}), 400
+@app.route("/tasks/<int:tid>", methods=["DELETE"])
+def delete_task(tid):
+    t = Task.query.get_or_404(tid)
     db.session.delete(t)
     db.session.commit()
+    # סידור אינדקסים מחדש
+    tasks = Task.query.order_by(Task.order_index.asc()).all()
+    for i, tk in enumerate(tasks, start=1):
+        tk.order_index = i
+    db.session.commit()
     return jsonify({"ok": True})
 
+@app.route("/tasks/<int:tid>/start", methods=["POST"])
+def start(tid):
+    t = Task.query.get_or_404(tid)
+    top_id = _top_runnable_id()
+    if _any_running() and t.status != "paused":
+        return abort(400, description="כבר רצה משימה אחרת")
+    if t.id != top_id and t.status != "paused":
+        return abort(400, description="אפשר להתחיל רק את המשימה העליונה או משימה שמושהתה")
+
+    # אם הייתה paused – לא משנים remaining; אם waiting – remaining=duration כבר מוגדר
+    t.status = "running"
+    t.started_at = now_utc()
+    db.session.commit()
+    return jsonify({"ok": True})
+
+@app.route("/tasks/<int:tid>/pause", methods=["POST"])
+def pause(tid):
+    t = Task.query.get_or_404(tid)
+    if t.status != "running":
+        return abort(400, description="המשימה אינה רצה")
+    utc = now_utc()
+    elapsed = int((utc - t.started_at).total_seconds()) if t.started_at else 0
+    t.remaining = max(t.remaining - elapsed, 0)
+    t.status = "paused"
+    t.started_at = None
+    db.session.commit()
+    return jsonify({"ok": True})
+
+@app.route("/tasks/<int:tid>/reset", methods=["POST"])
+def reset(tid):
+    t = Task.query.get_or_404(tid)
+    # מאפס לזמן המקורי ומחזיר למצב waiting (לא מתחיל עד לחיצה על 'התחל')
+    t.remaining = t.duration
+    t.started_at = None
+    t.finished_at = None if t.status != "done" else t.finished_at
+    t.status = "waiting" if t.status != "done" else "done"
+    db.session.commit()
+    return jsonify({"ok": True})
+
+# קבצי סטטיק/טמפלט
+@app.route("/static/<path:path>")
+def static_files(path):
+    return send_from_directory(app.static_folder, path)
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
