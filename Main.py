@@ -4,16 +4,20 @@ import pytz
 
 app = Flask(__name__)
 
-# טיימזון ישראל
 tz = pytz.timezone("Asia/Jerusalem")
 
-# רשימת משימות
 tasks = []
 
 
 def now():
-    """החזרת זמן נוכחי עם טיימזון ישראל"""
     return datetime.now(tz)
+
+
+def format_td(td: timedelta):
+    total_seconds = int(td.total_seconds())
+    h, rem = divmod(total_seconds, 3600)
+    m, s = divmod(rem, 60)
+    return f"{h:02}:{m:02}:{s:02}"
 
 
 @app.route("/")
@@ -32,7 +36,7 @@ def add_task():
 
     task = {
         "name": name,
-        "original_duration": duration,  # שמירה של הזמן המקורי
+        "original_duration": duration,
         "duration": duration,
         "start_time": None,
         "end_time": None,
@@ -46,8 +50,6 @@ def add_task():
 def start_task(task_id):
     if 0 <= task_id < len(tasks):
         task = tasks[task_id]
-
-        # אפשר להתחיל רק אם זו המשימה הראשונה או מושהית
         if task["status"] in ["ממתין", "מושהה"]:
             task["start_time"] = now()
             task["end_time"] = task["start_time"] + task["duration"]
@@ -62,7 +64,7 @@ def pause_task(task_id):
         task = tasks[task_id]
         if task["status"] == "רץ":
             remaining = task["end_time"] - now()
-            task["duration"] = remaining
+            task["duration"] = max(remaining, timedelta(seconds=0))
             task["status"] = "מושהה"
             return jsonify(success=True)
     return jsonify(success=False)
@@ -92,20 +94,20 @@ def delete_task(task_id):
 def edit_task(task_id):
     if 0 <= task_id < len(tasks):
         task = tasks[task_id]
-        new_name = request.form.get("name", task["name"])
-        hours = int(request.form.get("hours", 0) or 0)
-        minutes = int(request.form.get("minutes", 0) or 0)
-        seconds = int(request.form.get("seconds", 0) or 0)
-        new_duration = timedelta(hours=hours, minutes=minutes, seconds=seconds)
+        if task["status"] not in ["רץ"]:  # אפשר לערוך רק אם לא רץ
+            new_name = request.form.get("name", task["name"])
+            hours = int(request.form.get("hours", 0) or 0)
+            minutes = int(request.form.get("minutes", 0) or 0)
+            seconds = int(request.form.get("seconds", 0) or 0)
+            new_duration = timedelta(hours=hours, minutes=minutes, seconds=seconds)
 
-        task["name"] = new_name
-        task["original_duration"] = new_duration
-        task["duration"] = new_duration
-        task["start_time"] = None
-        task["end_time"] = None
-        task["status"] = "ממתין"
-
-        return jsonify(success=True)
+            task["name"] = new_name
+            task["original_duration"] = new_duration
+            task["duration"] = new_duration
+            task["start_time"] = None
+            task["end_time"] = None
+            task["status"] = "ממתין"
+            return jsonify(success=True)
     return jsonify(success=False)
 
 
@@ -135,7 +137,6 @@ def state():
                         next_task["end_time"] = next_task["start_time"] + next_task["duration"]
                         next_task["status"] = "רץ"
 
-        # חישוב שעת סיום כוללת
         if task["end_time"]:
             overall_end = max(overall_end, task["end_time"])
 
@@ -143,8 +144,11 @@ def state():
             "id": i,
             "name": task["name"],
             "status": task["status"],
+            "initial_duration": format_td(task["original_duration"]),
             "end_time": task["end_time"].strftime("%H:%M:%S") if task["end_time"] else None,
-            "remaining": int(remaining) if remaining is not None else None
+            "remaining": format_td(task["end_time"] - current_time) if status == "רץ" and task["end_time"] else (
+                format_td(task["duration"]) if status in ["מושהה", "ממתין"] else "00:00:00"
+            )
         })
 
     return jsonify(tasks=data, overall_end=overall_end.strftime("%H:%M:%S"))
