@@ -1,41 +1,122 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>טיימר משימות ⏱</title>
+    <title>⏱️ טיימר משימות</title>
     <style>
-        body { font-family: Arial, sans-serif; text-align: center; direction: rtl; }
-        .task { margin: 10px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; }
-        button { margin: 2px; }
+        body {
+            font-family: Arial, sans-serif;
+            direction: rtl;
+            background: #f9f9f9;
+            padding: 20px;
+        }
+        h1, h2 {
+            text-align: center;
+        }
+        form {
+            margin: 20px auto;
+            text-align: center;
+        }
+        input, button {
+            margin: 5px;
+            padding: 5px 10px;
+        }
+        ul {
+            list-style: none;
+            padding: 0;
+            max-width: 600px;
+            margin: auto;
+        }
+        li {
+            background: #fff;
+            margin: 10px 0;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        .task-actions a {
+            margin-left: 10px;
+            text-decoration: none;
+            padding: 5px 8px;
+            border-radius: 5px;
+            font-size: 14px;
+        }
+        .start { background: #4caf50; color: #fff; }
+        .pause { background: #ff9800; color: #fff; }
+        .resume { background: #2196f3; color: #fff; }
+        .finish { background: #f44336; color: #fff; }
     </style>
+    <script>
+        function startCountdown(taskId, duration) {
+            let display = document.getElementById("timer-" + taskId);
+            let endTime = Date.now() + duration * 1000;
+
+            function update() {
+                let diff = Math.floor((endTime - Date.now()) / 1000);
+                if (diff <= 0) {
+                    display.textContent = "00:00:00";
+                    clearInterval(timer);
+                    // אחרי סיום משימה – מפעיל את המשימה הבאה
+                    fetch("/finish/" + taskId).then(() => {
+                        window.location.href = "/start_next";
+                    });
+                } else {
+                    let h = Math.floor(diff / 3600);
+                    let m = Math.floor((diff % 3600) / 60);
+                    let s = diff % 60;
+                    display.textContent =
+                        String(h).padStart(2, '0') + ":" +
+                        String(m).padStart(2, '0') + ":" +
+                        String(s).padStart(2, '0');
+                }
+            }
+            update();
+            let timer = setInterval(update, 1000);
+        }
+    </script>
 </head>
 <body>
-    <h1>טיימר משימות ⏱</h1>
+    <h1>⏱️ טיימר משימות</h1>
 
-    <form action="/add" method="post">
+    <form action="/add" method="POST">
         <input type="text" name="name" placeholder="שם משימה" required>
-        <input type="number" name="minutes" placeholder="דקות" min="0">
-        <input type="number" name="seconds" placeholder="שניות" min="0" max="59">
+        <input type="number" name="hours" placeholder="שעות" min="0" value="0">
+        <input type="number" name="minutes" placeholder="דקות" min="0" max="59" value="0">
+        <input type="number" name="seconds" placeholder="שניות" min="0" max="59" value="0">
         <button type="submit">➕ הוסף משימה</button>
     </form>
 
-    <h2>רשימת משימות 📝</h2>
-    {% for task in tasks %}
-        <div class="task">
-            <b>{{ task.name }}</b> – 
-            מצב: {{ task.status }} <br>
-            זמן שנשאר: {{ task.remaining_time() // 60 }}:{{ "%02d"|format(task.remaining_time() % 60) }} דקות <br>
-            <a href="/start/{{task.id}}"><button>▶️ התחל</button></a>
-            <a href="/pause/{{task.id}}"><button>⏸ השהה</button></a>
-            <a href="/resume/{{task.id}}"><button>⏯ המשך</button></a>
-            <a href="/finish/{{task.id}}"><button>✅ סיים</button></a>
-            <form action="/edit/{{task.id}}" method="post" style="display:inline;">
-                <input type="text" name="name" placeholder="שם חדש">
-                <input type="number" name="minutes" placeholder="דקות" min="0">
-                <input type="number" name="seconds" placeholder="שניות" min="0" max="59">
-                <button type="submit">✏️ ערוך</button>
-            </form>
-        </div>
-    {% endfor %}
+    <h2>רשימת משימות</h2>
+    <ul>
+        {% for task in tasks %}
+        <li>
+            <b>{{ task.name }}</b><br>
+            <span id="timer-{{ task.id }}">
+                {% if task.status == "running" %}
+                    <script>
+                        startCountdown({{ task.id }}, {{ task.remaining_time() }});
+                    </script>
+                {% else %}
+                    {% set rt = task.remaining_time() %}
+                    {{ "%02d:%02d:%02d" % (rt//3600, (rt%3600)//60, rt%60) }}
+                {% endif %}
+            </span>
+            {% if task.end_time %}
+                <div>⏳ סיום משוער: {{ task.end_time.strftime("%H:%M:%S") }}</div>
+            {% endif %}
+
+            <div class="task-actions">
+                {% if task.status == "pending" %}
+                    <a href="/start/{{ task.id }}" class="start">▶ התחל</a>
+                {% elif task.status == "running" %}
+                    <a href="/pause/{{ task.id }}" class="pause">⏸ עצור</a>
+                {% elif task.status == "paused" %}
+                    <a href="/resume/{{ task.id }}" class="resume">⏯ המשך</a>
+                {% endif %}
+                <a href="/finish/{{ task.id }}" class="finish">✔ סיים</a>
+            </div>
+        </li>
+        {% endfor %}
+    </ul>
 </body>
 </html>
