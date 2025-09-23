@@ -2,59 +2,117 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>⏱ טיימר משימות</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>טיימר משימות ⏱</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background-color: #f5f5f5;
+        }
+        h1 {
+            color: #333;
+        }
+        .task-list {
+            margin: 20px auto;
+            width: 90%;
+            max-width: 600px;
+            text-align: right;
+        }
+        .task {
+            background: #fff;
+            padding: 10px;
+            margin: 8px 0;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+        button {
+            margin: 0 2px;
+            padding: 4px 10px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .start { background: #4CAF50; color: white; }
+        .stop { background: #f44336; color: white; }
+        .reset { background: #9E9E9E; color: white; }
+        .done { background: #2196F3; color: white; }
+        .edit { background: #FF9800; color: white; }
+        .delete { background: #555; color: white; }
+        input[type="text"], input[type="number"] {
+            padding: 5px;
+            margin: 2px;
+            width: 70px;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
-    <h1>⏱ טיימר משימות</h1>
+    <h1>טיימר משימות ⏱</h1>
 
-    <form action="/add" method="POST">
+    <form action="/add" method="post">
         <input type="text" name="name" placeholder="שם משימה" required>
-        <input type="number" name="hours" placeholder="שעות" min="0" max="23" value="0">
-        <input type="number" name="minutes" placeholder="דקות" min="0" max="59" value="0">
-        <input type="number" name="seconds" placeholder="שניות" min="0" max="59" value="0">
+        <input type="number" name="hours" value="שעות" onfocus="this.value=''" min="0" max="23">
+        <input type="number" name="minutes" value="דקות" onfocus="this.value=''" min="0" max="59">
+        <input type="number" name="seconds" value="שניות" onfocus="this.value=''" min="0" max="59">
         <button type="submit">➕ הוסף משימה</button>
     </form>
 
-    <h2>רשימת משימות</h2>
-    <ul>
+    <h2>רשימת משימות 📋</h2>
+    <div class="task-list">
         {% for task in tasks %}
-        <li>
-            {% if edit_id == task.id %}
-                <form action="/update/{{ task.id }}" method="POST">
-                    <input type="text" name="name" value="{{ task.name }}" required>
-                    <input type="number" name="hours" value="{{ task.duration // 3600 }}" min="0" max="23">
-                    <input type="number" name="minutes" value="{{ (task.duration % 3600) // 60 }}" min="0" max="59">
-                    <input type="number" name="seconds" value="{{ task.duration % 60 }}" min="0" max="59">
-                    <button type="submit">💾 שמור</button>
-                    <a href="{{ url_for('index') }}">❌ ביטול</a>
+        <div class="task">
+            <span>
+                <b>{{ task.name }}</b>
+                ({{ task.duration // 3600 }}ש {{ (task.duration % 3600) // 60 }}ד {{ task.duration % 60 }}ש')
+                - {{ task.status }}
+            </span>
+            <span>
+                <form action="/start/{{ task.id }}" method="post" style="display:inline;">
+                    <button class="start">▶ התחל</button>
                 </form>
-            {% else %}
-                <b>{{ task.name }}</b><br>
-                <span id="timer-{{ task.id }}">
-                    {% set rt = task.remaining_time() %}
-                    {{ "%02d:%02d:%02d" % (rt//3600, (rt%3600)//60, rt%60) }}
-                </span>
-                {% if task.end_time %}
-                    <div>⏳ סיום משוער: {{ task.end_time.strftime("%H:%M:%S") }}</div>
-                {% endif %}
-
-                <div class="task-actions">
-                    {% if task.status == "pending" %}
-                        <a href="/start/{{ task.id }}">▶ התחל</a>
-                        <a href="{{ url_for('index', edit=task.id) }}">✏ ערוך</a>
-                    {% elif task.status == "running" %}
-                        <a href="/pause/{{ task.id }}">⏸ עצור</a>
-                    {% elif task.status == "paused" %}
-                        <a href="/resume/{{ task.id }}">⏯ המשך</a>
-                        <a href="{{ url_for('index', edit=task.id) }}">✏ ערוך</a>
-                    {% endif %}
-                    <a href="/finish/{{ task.id }}">✔ סיים</a>
-                    <a href="/delete/{{ task.id }}" onclick="return confirm('למחוק משימה?')">🗑 מחק</a>
-                </div>
-            {% endif %}
-        </li>
+                <form action="/stop/{{ task.id }}" method="post" style="display:inline;">
+                    <button class="stop">⏹ עצור</button>
+                </form>
+                <form action="/reset/{{ task.id }}" method="post" style="display:inline;">
+                    <button class="reset">🔄 אפס</button>
+                </form>
+                <form action="/done/{{ task.id }}" method="post" style="display:inline;">
+                    <button class="done">✔ סיום</button>
+                </form>
+                <form action="/edit/{{ task.id }}" method="get" style="display:inline;">
+                    <button class="edit">✏ ערוך</button>
+                </form>
+                <form action="/delete/{{ task.id }}" method="post" style="display:inline;">
+                    <button class="delete">🗑 מחק</button>
+                </form>
+            </span>
+        </div>
+        {% else %}
+        <p>אין משימות כרגע 🚀</p>
         {% endfor %}
-    </ul>
+    </div>
+
+    {% if edit_task %}
+    <h2>עריכת משימה ✏</h2>
+    <form action="/update/{{ edit_task.id }}" method="post">
+        <input type="text" name="name" value="{{ edit_task.name }}" required>
+        <input type="number" name="hours" 
+               value="{{ edit_task.duration // 3600 if edit_task.duration // 3600 > 0 else 'שעות' }}" 
+               onfocus="if(this.value=='שעות') this.value=''" 
+               min="0" max="23">
+        <input type="number" name="minutes" 
+               value="{{ (edit_task.duration % 3600) // 60 if (edit_task.duration % 3600) // 60 > 0 else 'דקות' }}" 
+               onfocus="if(this.value=='דקות') this.value=''" 
+               min="0" max="59">
+        <input type="number" name="seconds" 
+               value="{{ edit_task.duration % 60 if edit_task.duration % 60 > 0 else 'שניות' }}" 
+               onfocus="if(this.value=='שניות') this.value=''" 
+               min="0" max="59">
+        <button type="submit">💾 שמור</button>
+    </form>
+    {% endif %}
 </body>
 </html>
