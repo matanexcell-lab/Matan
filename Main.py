@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for
 from flask_sqlalchemy import SQLAlchemy
-from datetime import datetime, timedelta
+from datetime import datetime
 
 app = Flask(__name__)
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///tasks.db'
@@ -10,7 +10,7 @@ db = SQLAlchemy(app)
 class Task(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    duration = db.Column(db.Integer, nullable=False)  # שניות
+    duration = db.Column(db.Integer, nullable=False)  # בשניות
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     start_time = db.Column(db.DateTime, nullable=True)
     end_time = db.Column(db.DateTime, nullable=True)
@@ -27,8 +27,8 @@ class Task(db.Model):
         return self.duration
 
 
-@app.before_first_request
-def create_tables():
+# יצירת הטבלאות בתוך הקשר אפליקציה (תואם Flask 3+)
+with app.app_context():
     db.create_all()
 
 
