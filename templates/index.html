@@ -18,12 +18,18 @@
     </form>
 
     <h2>📋 רשימת משימות</h2>
+
+    {% if total_end_time %}
+    <p><strong>🕒 כל המשימות צפויות להסתיים בשעה:</strong> {{ total_end_time }}</p>
+    {% endif %}
+
     {% if tasks %}
     <table>
         <tr>
             <th>שם משימה</th>
             <th>מצב</th>
             <th>זמן שנותר</th>
+            <th>שעת סיום צפויה</th>
             <th>פעולות</th>
         </tr>
         {% for task in tasks %}
@@ -36,6 +42,17 @@
                     {{ task.remaining_time() }}
                 </span>
             </td>
+            <td>
+                {% if task.status == "פעילה" and task.end_time %}
+                    {{ task.end_time.strftime("%H:%M:%S") }}
+                {% elif task.status == "ממתינה" and task.duration > 0 %}
+                    ⏳ יחושב כשיתחיל
+                {% elif task.status == "הסתיימה" %}
+                    ✅ הסתיים
+                {% else %}
+                    -
+                {% endif %}
+            </td>
             <td class="actions">
                 {% if task.status != "פעילה" %}
                 <form action="{{ url_for('start_task', task_id=task.id) }}" method="post">
@@ -47,19 +64,16 @@
                     <button type="submit" class="stop-btn">⏸ עצור</button>
                 </form>
                 {% endif %}
-                <form action="{{ url_for('done_task', task_id=task.id) }}" method="post">
-                    <button type="submit" class="done-btn">✅ סיים</button>
-                </form>
-                <a href="{{ url_for('index', edit=task.id) }}">✏️ ערוך</a>
                 <form action="{{ url_for('delete_task', task_id=task.id) }}" method="post">
                     <button type="submit" class="delete-btn">🗑 מחק</button>
                 </form>
+                <a href="{{ url_for('index', edit=task.id) }}">✏️ ערוך</a>
             </td>
         </tr>
 
         {% if edit_task and edit_task.id == task.id %}
         <tr>
-            <td colspan="4">
+            <td colspan="5">
                 <form action="{{ url_for('update_task', task_id=task.id) }}" method="post">
                     <input type="text" name="name" value="{{ edit_task.name }}" required>
                     <input type="number" name="hours" value="{{ edit_task.duration // 3600 if edit_task.duration // 3600 > 0 else '' }}" placeholder="שעות" min="0">
