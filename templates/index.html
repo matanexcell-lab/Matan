@@ -1,104 +1,154 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="he" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <title>ניהול משימות</title>
-    <style>
-        body { font-family: Arial, sans-serif; direction: rtl; text-align: center; }
-        table { margin: auto; border-collapse: collapse; width: 80%; }
-        th, td { border: 1px solid black; padding: 8px; }
-        button { margin: 2px; }
-    </style>
+  <meta charset="utf-8"/>
+  <title>טיימר משימות</title>
+  <style>
+    body { font-family: Arial, sans-serif; direction: rtl; }
+    h1 { text-align:center; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+    input[type="number"] { width: 60px; }
+    input[type="text"] { width: 160px; }
+    .muted { color: #777; font-size: 12px; }
+    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
+    .running { background:#d9ffd9; }
+    .paused { background:#fff0b3; }
+    .pending { background:#f2f2f2; }
+    .done { background:#e6e6e6; text-decoration: line-through; color:#666; }
+    .actions button { margin: 0 2px; }
+  </style>
 </head>
 <body>
-    <h1>ניהול משימות</h1>
 
-    <h3>הוספת משימה</h3>
-    <input id="name" placeholder="שם משימה">
-    <input id="hours" type="number" placeholder="שעות" min="0">
-    <input id="minutes" type="number" placeholder="דקות" min="0">
-    <input id="seconds" type="number" placeholder="שניות" min="0">
-    <button onclick="addTask()">הוסף</button>
+<h1>טיימר משימות</h1>
 
-    <h3>רשימת משימות</h3>
-    <table>
-        <thead>
-            <tr>
-                <th>שם</th>
-                <th>זמן נשאר</th>
-                <th>סטטוס</th>
-                <th>פעולות</th>
-            </tr>
-        </thead>
-        <tbody id="taskTable"></tbody>
-    </table>
+<div style="text-align:center;margin-bottom:12px">
+  <span id="now" class="muted"></span>
+  <br/>
+  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span>
+</div>
+
+<!-- הוספת משימה -->
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:10px">
+  <label>שם משימה חדשה
+    <input id="newName" type="text" placeholder="שם משימה">
+  </label>
+  <label>שעות <input id="newH" type="number" min="0" value="0"></label>
+  <label>דקות <input id="newM" type="number" min="0" value="0"></label>
+  <label>שניות <input id="newS" type="number" min="0" value="0"></label>
+  <button id="btnAdd">הוסף</button>
+</div>
+
+<table>
+  <thead>
+  <tr>
+    <th>שם</th>
+    <th>זמן התחלתי</th>
+    <th>זמן נותר</th>
+    <th>שעת סיום</th>
+    <th>סטטוס</th>
+    <th>עריכה (כשלא פעילה)</th>
+    <th>פעולות</th>
+  </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
 
 <script>
+const $ = (sel) => document.querySelector(sel);
+
+function fmtHHMMSS(totalSeconds) {
+  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+async function api(url, method="GET", body=null) {
+  const opt = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opt.body = JSON.stringify(body);
+  const res = await fetch(url, opt);
+  return res.json();
+}
+
 async function addTask() {
-    const name = document.getElementById("name").value;
-    const hours = document.getElementById("hours").value || 0;
-    const minutes = document.getElementById("minutes").value || 0;
-    const seconds = document.getElementById("seconds").value || 0;
-
-    await fetch("/add", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, hours, minutes, seconds })
-    });
-    loadTasks();
+  const name = $("#newName").value.trim();
+  const hours = parseInt($("#newH").value || "0", 10);
+  const minutes = parseInt($("#newM").value || "0", 10);
+  const seconds = parseInt($("#newS").value || "0", 10);
+  await api("/add", "POST", { name, hours, minutes, seconds });
+  $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
 }
 
-async function startTask(id) {
-    await fetch("/start/" + id, { method: "POST" });
-    loadTasks();
+async function startTask(id){ await api(`/start/${id}`,"POST"); }
+async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
+async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
+async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
+
+async function saveEdit(id){
+  const row = document.getElementById(`row-${id}`);
+  const nm = row.querySelector(".edit-name").value;
+  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
+  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
+  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
+  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
 }
 
-async function pauseTask(id) {
-    await fetch("/pause/" + id, { method: "POST" });
-    loadTasks();
+function statusClass(st){
+  if (st === "running") return "badge running";
+  if (st === "paused")  return "badge paused";
+  if (st === "pending") return "badge pending";
+  return "badge done";
 }
 
-async function resetTask(id) {
-    await fetch("/reset/" + id, { method: "POST" });
-    loadTasks();
+async function render() {
+  const data = await api("/state");
+  $("#overallEnd").textContent = data.overall_end_time || "-";
+  $("#now").textContent = data.now || "";
+
+  const tb = $("#tbody");
+  tb.innerHTML = "";
+  data.tasks.forEach(t => {
+    const tr = document.createElement("tr");
+    tr.id = `row-${t.id}`;
+    tr.className = t.status;
+
+    // ניתן לערוך רק כשהמשימה לא running
+    const canEdit = (t.status !== "running");
+
+    tr.innerHTML = `
+      <td>
+        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
+      </td>
+      <td class="muted">${fmtHHMMSS(t.duration)}</td>
+      <td><strong>${t.remaining_hhmmss}</strong></td>
+      <td>${t.end_time_str || "-"}</td>
+      <td><span class="${statusClass(t.status)}">${t.status}</span></td>
+      <td>
+        <div style="display:flex;gap:6px;justify-content:center;align-items:center">
+          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
+          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
+          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
+          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
+        </div>
+      </td>
+      <td class="actions">
+        <button onclick="startTask(${t.id})">התחל</button>
+        <button onclick="pauseTask(${t.id})">השהה</button>
+        <button onclick="resetTask(${t.id})">איפוס</button>
+        <button onclick="deleteTask(${t.id})">מחק</button>
+      </td>
+    `;
+    tb.appendChild(tr);
+  });
 }
 
-async function deleteTask(id) {
-    await fetch("/delete/" + id, { method: "POST" });
-    loadTasks();
-}
-
-async function loadTasks() {
-    const res = await fetch("/state");
-    const tasks = await res.json();
-    const tbody = document.getElementById("taskTable");
-    tbody.innerHTML = "";
-    tasks.forEach(t => {
-        const row = document.createElement("tr");
-        row.innerHTML = `
-            <td>${t.name}</td>
-            <td>${formatTime(t.remaining)}</td>
-            <td>${t.status}</td>
-            <td>
-                <button onclick="startTask(${t.id})">התחל</button>
-                <button onclick="pauseTask(${t.id})">השהה</button>
-                <button onclick="resetTask(${t.id})">אפס</button>
-                <button onclick="deleteTask(${t.id})">מחק</button>
-            </td>
-        `;
-        tbody.appendChild(row);
-    });
-}
-
-function formatTime(seconds) {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = Math.floor(seconds % 60);
-    return `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-}
-
-setInterval(loadTasks, 1000);
-loadTasks();
+// פולינג כל שנייה + כפתור הוספה
+setInterval(render, 1000);
+render();
+document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
 </script>
 </body>
 </html>
