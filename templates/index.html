@@ -2,117 +2,112 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>טיימר משימות ⏱</title>
+    <title>⏱ טיימר משימות</title>
     <style>
         body {
             font-family: Arial, sans-serif;
             text-align: center;
-            background-color: #f5f5f5;
+            direction: rtl;
+            background-color: #f8f9fa;
         }
         h1 {
             color: #333;
         }
-        .task-list {
-            margin: 20px auto;
-            width: 90%;
-            max-width: 600px;
-            text-align: right;
+        form {
+            margin: 20px 0;
         }
-        .task {
-            background: #fff;
-            padding: 10px;
-            margin: 8px 0;
-            border-radius: 8px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        input, button {
+            padding: 6px;
+            margin: 3px;
         }
-        button {
-            margin: 0 2px;
-            padding: 4px 10px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
+        table {
+            margin: 0 auto;
+            border-collapse: collapse;
+            width: 80%;
+            background: white;
+            box-shadow: 0 0 5px rgba(0,0,0,0.1);
         }
-        .start { background: #4CAF50; color: white; }
-        .stop { background: #f44336; color: white; }
-        .reset { background: #9E9E9E; color: white; }
-        .done { background: #2196F3; color: white; }
-        .edit { background: #FF9800; color: white; }
-        .delete { background: #555; color: white; }
-        input[type="text"], input[type="number"] {
-            padding: 5px;
-            margin: 2px;
-            width: 70px;
-            text-align: center;
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px;
+        }
+        th {
+            background: #e9ecef;
+        }
+        .actions form {
+            display: inline;
         }
     </style>
 </head>
 <body>
-    <h1>טיימר משימות ⏱</h1>
+    <h1>⏱ טיימר משימות</h1>
 
-    <form action="/add" method="post">
+    <!-- טופס הוספת משימה -->
+    <form action="{{ url_for('add_task') }}" method="post">
         <input type="text" name="name" placeholder="שם משימה" required>
-        <input type="number" name="hours" value="שעות" onfocus="this.value=''" min="0" max="23">
-        <input type="number" name="minutes" value="דקות" onfocus="this.value=''" min="0" max="59">
-        <input type="number" name="seconds" value="שניות" onfocus="this.value=''" min="0" max="59">
+        <input type="number" name="hours" placeholder="שעות" min="0">
+        <input type="number" name="minutes" placeholder="דקות" min="0">
+        <input type="number" name="seconds" placeholder="שניות" min="0">
         <button type="submit">➕ הוסף משימה</button>
     </form>
 
-    <h2>רשימת משימות 📋</h2>
-    <div class="task-list">
+    <h2>📋 רשימת משימות</h2>
+    {% if tasks %}
+    <table>
+        <tr>
+            <th>שם משימה</th>
+            <th>מצב</th>
+            <th>זמן שנותר</th>
+            <th>פעולות</th>
+        </tr>
         {% for task in tasks %}
-        <div class="task">
-            <span>
-                <b>{{ task.name }}</b>
-                ({{ task.duration // 3600 }}ש {{ (task.duration % 3600) // 60 }}ד {{ task.duration % 60 }}ש')
-                - {{ task.status }}
-            </span>
-            <span>
-                <form action="/start/{{ task.id }}" method="post" style="display:inline;">
-                    <button class="start">▶ התחל</button>
+        <tr>
+            <td>{{ task.name }}</td>
+            <td>{{ task.status }}</td>
+            <td>
+                {% if task.status == "פעילה" %}
+                    {{ task.remaining_time() }} שניות
+                {% else %}
+                    {{ task.duration }} שניות
+                {% endif %}
+            </td>
+            <td class="actions">
+                {% if task.status != "פעילה" %}
+                <form action="{{ url_for('start_task', task_id=task.id) }}" method="post">
+                    <button type="submit">▶️ התחל</button>
                 </form>
-                <form action="/stop/{{ task.id }}" method="post" style="display:inline;">
-                    <button class="stop">⏹ עצור</button>
+                {% endif %}
+                {% if task.status == "פעילה" %}
+                <form action="{{ url_for('stop_task', task_id=task.id) }}" method="post">
+                    <button type="submit">⏸ עצור</button>
                 </form>
-                <form action="/reset/{{ task.id }}" method="post" style="display:inline;">
-                    <button class="reset">🔄 אפס</button>
+                {% endif %}
+                <form action="{{ url_for('done_task', task_id=task.id) }}" method="post">
+                    <button type="submit">✅ סיים</button>
                 </form>
-                <form action="/done/{{ task.id }}" method="post" style="display:inline;">
-                    <button class="done">✔ סיום</button>
+                <a href="{{ url_for('edit_task', task_id=task.id) }}">✏️ ערוך</a>
+                <form action="{{ url_for('delete_task', task_id=task.id) }}" method="post">
+                    <button type="submit">🗑 מחק</button>
                 </form>
-                <form action="/edit/{{ task.id }}" method="get" style="display:inline;">
-                    <button class="edit">✏ ערוך</button>
+            </td>
+        </tr>
+        {% if edit_task and edit_task.id == task.id %}
+        <tr>
+            <td colspan="4">
+                <form action="{{ url_for('update_task', task_id=task.id) }}" method="post">
+                    <input type="text" name="name" value="{{ edit_task.name }}" required>
+                    <input type="number" name="hours" placeholder="שעות" min="0">
+                    <input type="number" name="minutes" placeholder="דקות" min="0">
+                    <input type="number" name="seconds" placeholder="שניות" min="0">
+                    <button type="submit">💾 עדכן</button>
                 </form>
-                <form action="/delete/{{ task.id }}" method="post" style="display:inline;">
-                    <button class="delete">🗑 מחק</button>
-                </form>
-            </span>
-        </div>
-        {% else %}
-        <p>אין משימות כרגע 🚀</p>
+            </td>
+        </tr>
+        {% endif %}
         {% endfor %}
-    </div>
-
-    {% if edit_task %}
-    <h2>עריכת משימה ✏</h2>
-    <form action="/update/{{ edit_task.id }}" method="post">
-        <input type="text" name="name" value="{{ edit_task.name }}" required>
-        <input type="number" name="hours" 
-               value="{{ edit_task.duration // 3600 if edit_task.duration // 3600 > 0 else 'שעות' }}" 
-               onfocus="if(this.value=='שעות') this.value=''" 
-               min="0" max="23">
-        <input type="number" name="minutes" 
-               value="{{ (edit_task.duration % 3600) // 60 if (edit_task.duration % 3600) // 60 > 0 else 'דקות' }}" 
-               onfocus="if(this.value=='דקות') this.value=''" 
-               min="0" max="59">
-        <input type="number" name="seconds" 
-               value="{{ edit_task.duration % 60 if edit_task.duration % 60 > 0 else 'שניות' }}" 
-               onfocus="if(this.value=='שניות') this.value=''" 
-               min="0" max="59">
-        <button type="submit">💾 שמור</button>
-    </form>
+    </table>
+    {% else %}
+    <p>🚀 אין משימות כרגע</p>
     {% endif %}
 </body>
 </html>
