@@ -10,33 +10,19 @@
             direction: rtl;
             background-color: #f8f9fa;
         }
-        h1 {
-            color: #333;
-        }
-        form {
-            margin: 20px 0;
-        }
-        input, button {
-            padding: 6px;
-            margin: 3px;
-        }
+        h1 { color: #333; }
+        form { margin: 20px 0; }
+        input, button { padding: 6px; margin: 3px; }
         table {
             margin: 0 auto;
             border-collapse: collapse;
-            width: 80%;
+            width: 85%;
             background: white;
             box-shadow: 0 0 5px rgba(0,0,0,0.1);
         }
-        th, td {
-            border: 1px solid #ccc;
-            padding: 8px;
-        }
-        th {
-            background: #e9ecef;
-        }
-        .actions form {
-            display: inline;
-        }
+        th, td { border: 1px solid #ccc; padding: 8px; }
+        th { background: #e9ecef; }
+        .actions form { display: inline; }
     </style>
 </head>
 <body>
@@ -65,11 +51,15 @@
             <td>{{ task.name }}</td>
             <td>{{ task.status }}</td>
             <td>
-                {% if task.status == "פעילה" %}
-                    {{ task.remaining_time() }} שניות
-                {% else %}
-                    {{ task.duration }} שניות
-                {% endif %}
+                <span class="timer"
+                      data-task-id="{{ task.id }}"
+                      data-remaining="{{ task.remaining_time() if task.status == 'פעילה' else task.duration }}">
+                    {% if task.status == "פעילה" %}
+                        {{ task.remaining_time() }}
+                    {% else %}
+                        {{ task.duration }}
+                    {% endif %}
+                </span> שניות
             </td>
             <td class="actions">
                 {% if task.status != "פעילה" %}
@@ -91,6 +81,8 @@
                 </form>
             </td>
         </tr>
+
+        <!-- טופס עריכה -->
         {% if edit_task and edit_task.id == task.id %}
         <tr>
             <td colspan="4">
@@ -109,5 +101,30 @@
     {% else %}
     <p>🚀 אין משימות כרגע</p>
     {% endif %}
+
+    <!-- JS לספירה לאחור -->
+    <script>
+        function startCountdown(element) {
+            let remaining = parseInt(element.dataset.remaining);
+            if (isNaN(remaining) || remaining <= 0) return;
+
+            function update() {
+                if (remaining > 0) {
+                    remaining--;
+                    element.textContent = remaining;
+                }
+            }
+            setInterval(update, 1000);
+        }
+
+        document.addEventListener("DOMContentLoaded", () => {
+            document.querySelectorAll(".timer").forEach(el => {
+                const statusCell = el.closest("tr").children[1];
+                if (statusCell.textContent.trim() === "פעילה") {
+                    startCountdown(el);
+                }
+            });
+        });
+    </script>
 </body>
 </html>
