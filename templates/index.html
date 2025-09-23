@@ -13,6 +13,7 @@
         .input-row { margin: 20px; }
         .input-row input { width: 60px; text-align: center; }
         #overallEnd { margin: 20px; font-weight: bold; font-size: 18px; }
+        input.edit-time { width: 40px; }
     </style>
 </head>
 <body>
@@ -50,21 +51,31 @@
                 $("#taskTable").empty();
                 resp.tasks.forEach(function(task) {
                     let row = "<tr>";
+
                     if (task.status === "רץ") {
                         row += "<td>" + task.name + "</td>";
                     } else {
-                        row += "<td><input type='text' value='" + task.name + "' onchange='editTask(" + task.id + ", this)'></td>";
+                        row += "<td><input type='text' value='" + task.name + "' onchange='editTask(" + task.id + ", this, null, null, null)'></td>";
                     }
+
                     row += "<td>" + task.status + "</td>";
                     row += "<td>" + task.initial_duration + "</td>";
                     row += "<td>" + (task.end_time || "") + "</td>";
                     row += "<td>" + task.remaining + "</td>";
+
                     row += "<td>";
                     row += "<button onclick='startTask(" + task.id + ")'>▶️ התחל</button>";
                     row += "<button onclick='pauseTask(" + task.id + ")'>⏸️ השהה</button>";
                     row += "<button onclick='resetTask(" + task.id + ")'>🔄 איפוס</button>";
                     row += "<button onclick='deleteTask(" + task.id + ")'>🗑️ מחק</button>";
+                    if (task.status !== "רץ") {
+                        row += "<br>שעות:<input class='edit-time' type='number' min='0' value='0' id='h"+task.id+"'>";
+                        row += " דקות:<input class='edit-time' type='number' min='0' value='0' id='m"+task.id+"'>";
+                        row += " שניות:<input class='edit-time' type='number' min='0' value='0' id='s"+task.id+"'>";
+                        row += "<button onclick='updateTime(" + task.id + ")'>✏️ עדכן זמן</button>";
+                    }
                     row += "</td>";
+
                     row += "</tr>";
                     $("#taskTable").append(row);
                 });
@@ -77,9 +88,16 @@
         function resetTask(id) { $.get("/reset/" + id, loadState); }
         function deleteTask(id) { $.get("/delete/" + id, loadState); }
 
-        function editTask(id, elem) {
+        function editTask(id, elem, h, m, s) {
             const name = $(elem).val();
-            $.post("/edit/" + id, { name: name, hours: 0, minutes: 0, seconds: 0 }, loadState);
+            $.post("/edit/" + id, { name: name, hours: h || 0, minutes: m || 0, seconds: s || 0 }, loadState);
+        }
+
+        function updateTime(id) {
+            const h = $("#h"+id).val();
+            const m = $("#m"+id).val();
+            const s = $("#s"+id).val();
+            $.post("/edit/" + id, { name: "", hours: h, minutes: m, seconds: s }, loadState);
         }
 
         $("#taskForm").submit(function(e) {
