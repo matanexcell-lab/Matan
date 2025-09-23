@@ -2,43 +2,15 @@
 <html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
-    <title>⏱️ טיימר משימות</title>
-    <!-- חיבור ל־CSS חיצוני -->
+    <title>⏱ טיימר משימות</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <script>
-        function startCountdown(taskId, duration) {
-            let display = document.getElementById("timer-" + taskId);
-            let endTime = Date.now() + duration * 1000;
-
-            function update() {
-                let diff = Math.floor((endTime - Date.now()) / 1000);
-                if (diff <= 0) {
-                    display.textContent = "00:00:00";
-                    clearInterval(timer);
-                    fetch("/finish/" + taskId).then(() => {
-                        window.location.href = "/start_next";
-                    });
-                } else {
-                    let h = Math.floor(diff / 3600);
-                    let m = Math.floor((diff % 3600) / 60);
-                    let s = diff % 60;
-                    display.textContent =
-                        String(h).padStart(2, '0') + ":" +
-                        String(m).padStart(2, '0') + ":" +
-                        String(s).padStart(2, '0');
-                }
-            }
-            update();
-            let timer = setInterval(update, 1000);
-        }
-    </script>
 </head>
 <body>
-    <h1>⏱️ טיימר משימות</h1>
+    <h1>⏱ טיימר משימות</h1>
 
     <form action="/add" method="POST">
         <input type="text" name="name" placeholder="שם משימה" required>
-        <input type="number" name="hours" placeholder="שעות" min="0" value="0">
+        <input type="number" name="hours" placeholder="שעות" min="0" max="23" value="0">
         <input type="number" name="minutes" placeholder="דקות" min="0" max="59" value="0">
         <input type="number" name="seconds" placeholder="שניות" min="0" max="59" value="0">
         <button type="submit">➕ הוסף משימה</button>
@@ -48,31 +20,38 @@
     <ul>
         {% for task in tasks %}
         <li>
-            <b>{{ task.name }}</b><br>
-            <span id="timer-{{ task.id }}">
-                {% if task.status == "running" %}
-                    <script>
-                        startCountdown({{ task.id }}, {{ task.remaining_time() }});
-                    </script>
-                {% else %}
+            {% if edit_id == task.id %}
+                <form action="/update/{{ task.id }}" method="POST">
+                    <input type="text" name="name" value="{{ task.name }}" required>
+                    <input type="number" name="hours" value="{{ task.duration // 3600 }}" min="0" max="23">
+                    <input type="number" name="minutes" value="{{ (task.duration % 3600) // 60 }}" min="0" max="59">
+                    <input type="number" name="seconds" value="{{ task.duration % 60 }}" min="0" max="59">
+                    <button type="submit">💾 שמור</button>
+                    <a href="{{ url_for('index') }}">❌ ביטול</a>
+                </form>
+            {% else %}
+                <b>{{ task.name }}</b><br>
+                <span id="timer-{{ task.id }}">
                     {% set rt = task.remaining_time() %}
                     {{ "%02d:%02d:%02d" % (rt//3600, (rt%3600)//60, rt%60) }}
+                </span>
+                {% if task.end_time %}
+                    <div>⏳ סיום משוער: {{ task.end_time.strftime("%H:%M:%S") }}</div>
                 {% endif %}
-            </span>
-            {% if task.end_time %}
-                <div>⏳ סיום משוער: {{ task.end_time.strftime("%H:%M:%S") }}</div>
-            {% endif %}
 
-            <div class="task-actions">
-                {% if task.status == "pending" %}
-                    <a href="/start/{{ task.id }}" class="start">▶ התחל</a>
-                {% elif task.status == "running" %}
-                    <a href="/pause/{{ task.id }}" class="pause">⏸ עצור</a>
-                {% elif task.status == "paused" %}
-                    <a href="/resume/{{ task.id }}" class="resume">⏯ המשך</a>
-                {% endif %}
-                <a href="/finish/{{ task.id }}" class="finish">✔ סיים</a>
-            </div>
+                <div class="task-actions">
+                    {% if task.status == "pending" %}
+                        <a href="/start/{{ task.id }}">▶ התחל</a>
+                        <a href="{{ url_for('index', edit=task.id) }}">✏ ערוך</a>
+                    {% elif task.status == "running" %}
+                        <a href="/pause/{{ task.id }}">⏸ עצור</a>
+                    {% elif task.status == "paused" %}
+                        <a href="/resume/{{ task.id }}">⏯ המשך</a>
+                        <a href="{{ url_for('index', edit=task.id) }}">✏ ערוך</a>
+                    {% endif %}
+                    <a href="/finish/{{ task.id }}">✔ סיים</a>
+                </div>
+            {% endif %}
         </li>
         {% endfor %}
     </ul>
