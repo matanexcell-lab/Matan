@@ -16,12 +16,14 @@ class Task(db.Model):
     status = db.Column(db.String(20), default="מושהה")
 
     def remaining(self):
+        """כמה זמן נשאר בשניות"""
         if self.status == "רץ" and self.end_time:
             delta = self.end_time - datetime.utcnow()
             return max(int(delta.total_seconds()), 0)
         return self.duration
 
     def formatted_remaining(self):
+        """הצגה בפורמט 00:00:00"""
         total = self.remaining()
         h, m = divmod(total, 3600)
         m, s = divmod(m, 60)
@@ -30,12 +32,41 @@ class Task(db.Model):
 with app.app_context():
     db.create_all()
 
+# ===== פונקציה כללית: עדכון רצף =====
+def update_sequence(finished_task_id=None):
+    """מסיים משימה ומפעיל את הבאה בתור"""
+    if finished_task_id:
+        finished = Task.query.get(finished_task_id)
+        if finished:
+            finished.status = "הסתיים"
+            finished.end_time = datetime.utcnow()
+            db.session.commit()
+
+    # מציאת המשימה הבאה
+    next_task = Task.query.filter(Task.status == "מושהה").order_by(Task.id.asc()).first()
+    if next_task:
+        next_task.start_time = datetime.utcnow()
+        next_task.end_time = next_task.start_time + timedelta(seconds=next_task.duration)
+        next_task.status = "רץ"
+        db.session.commit()
+
 # ===== דף ראשי =====
 @app.route("/")
 def index():
-    # סדר מלמעלה למטה (כל חדשה מתווספת למטה)
     tasks = Task.query.order_by(Task.id.asc()).all()
-    return render_template("index.html", tasks=tasks)
+
+    # חישוב שעת סיום כוללת
+    total_end_time = None
+    if tasks:
+        current_time = datetime.utcnow()
+        for t in tasks:
+            if t.status == "רץ" and t.end_time:
+                current_time = t.end_time
+            elif t.status == "מושהה" and t.duration > 0:
+                current_time += timedelta(seconds=t.duration)
+        total_end_time = current_time.strftime("%H:%M:%S")
+
+    return render_template("index.html", tasks=tasks, total_end_time=total_end_time)
 
 # ===== הוספת משימה =====
 @app.route("/add", methods=["POST"])
@@ -57,10 +88,12 @@ def add_task():
 def start_task(task_id):
     task = Task.query.get(task_id)
     if task:
-        task.start_time = datetime.utcnow()
-        task.end_time = task.start_time + timedelta(seconds=task.duration)
-        task.status = "רץ"
-        db.session.commit()
+        # אם היא מושהית או הראשונה
+        if task.status in ["מושהה", "עצורה"]:
+            task.start_time = datetime.utcnow()
+            task.end_time = task.start_time + timedelta(seconds=task.duration)
+            task.status = "רץ"
+            db.session.commit()
     return redirect(url_for("index"))
 
 # ===== עצירת משימה =====
@@ -68,8 +101,8 @@ def start_task(task_id):
 def pause_task(task_id):
     task = Task.query.get(task_id)
     if task and task.status == "רץ":
-        task.duration = task.remaining()
-        task.status = "מושהה"
+        task.duration = task.remaining()  # שמירת הזמן שנותר
+        task.status = "עצורה"
         task.start_time = None
         task.end_time = None
         db.session.commit()
@@ -89,20 +122,7 @@ def reset_task(task_id):
 # ===== סיום משימה =====
 @app.route("/finish/<int:task_id>")
 def finish_task(task_id):
-    task = Task.query.get(task_id)
-    if task:
-        task.status = "הסתיים"
-        task.end_time = datetime.utcnow()
-        db.session.commit()
-
-        # התחלה אוטומטית של המשימה הבאה
-        next_task = Task.query.filter(Task.id > task.id, Task.status == "מושהה") \
-                              .order_by(Task.id.asc()).first()
-        if next_task:
-            next_task.start_time = datetime.utcnow()
-            next_task.end_time = next_task.start_time + timedelta(seconds=next_task.duration)
-            next_task.status = "רץ"
-            db.session.commit()
+    update_sequence(finished_task_id=task_id)
     return redirect(url_for("index"))
 
 # ===== עריכת משימה =====
