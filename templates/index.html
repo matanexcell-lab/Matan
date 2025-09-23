@@ -1,35 +1,93 @@
 <!DOCTYPE html>
-<html lang="he">
+<html lang="he" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <title>טיימר משימות</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #f9f9f9;
+            color: #333;
+            text-align: center;
+            direction: rtl;
+        }
+        h1 {
+            color: #007BFF;
+        }
+        form {
+            margin: 15px 0;
+        }
+        input[type="text"] {
+            padding: 8px;
+            width: 200px;
+        }
+        button {
+            padding: 8px 15px;
+            margin: 2px;
+            border: none;
+            background: #007BFF;
+            color: white;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        ul {
+            list-style: none;
+            padding: 0;
+            max-width: 500px;
+            margin: auto;
+        }
+        li {
+            background: white;
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        a {
+            margin: 0 5px;
+            color: #007BFF;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        form.inline {
+            display: inline;
+        }
+        input[name="name"] {
+            width: 120px;
+        }
+    </style>
 </head>
 <body>
     <h1>טיימר משימות ⏱️</h1>
 
     <form action="/add" method="POST">
         <input type="text" name="name" placeholder="שם משימה חדשה" required>
-        <button type="submit">הוסף</button>
+        <button type="submit">➕ הוסף</button>
     </form>
 
     <ul>
         {% for task in tasks %}
         <li>
-            {{ task.name }} - {{ task.status }}
+            <b>{{ task.name }}</b> - {{ task.status }}
             {% if task.status == "ממתינה" %}
-                <a href="/start/{{task.id}}">התחל</a>
+                <a href="/start/{{task.id}}">▶️ התחל</a>
             {% elif task.status == "פעילה" %}
-                <a href="/pause/{{task.id}}">השהה</a>
-                <a href="/finish/{{task.id}}">סיים</a>
+                <a href="/pause/{{task.id}}">⏸️ השהה</a>
+                <a href="/finish/{{task.id}}">✅ סיים</a>
             {% elif task.status == "מושהית" %}
-                <a href="/start/{{task.id}}">המשך</a>
-                <a href="/finish/{{task.id}}">סיים</a>
+                <a href="/start/{{task.id}}">▶️ המשך</a>
+                <a href="/finish/{{task.id}}">✅ סיים</a>
             {% endif %}
-            <form action="/edit/{{task.id}}" method="POST" style="display:inline;">
+            <form action="/edit/{{task.id}}" method="POST" class="inline">
                 <input type="text" name="name" placeholder="שם חדש">
-                <button type="submit">שנה</button>
+                <button type="submit">✏️ שנה</button>
             </form>
-            <a href="/delete/{{task.id}}">מחק</a>
+            <a href="/delete/{{task.id}}">🗑️ מחק</a>
         </li>
         {% endfor %}
     </ul>
