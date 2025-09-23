@@ -1,67 +1,115 @@
-from flask import Flask, request, jsonify, make_response, render_template_string
-from datetime import datetime, timedelta, timezone
-import pytz, threading, os
+from flask import Flask, render_template, request, jsonify
+from datetime import datetime, timedelta
+import pytz
 
 app = Flask(__name__)
 
-IL_TZ = pytz.timezone("Asia/Jerusalem")
-
+# כל המשימות נשמרות כאן בזיכרון (בשרת אמיתי היינו שמים DB)
 tasks = []
-_next_id = 1
-lock = threading.Lock()
+tz = pytz.timezone("Asia/Jerusalem")
 
 
-def now_utc():
-    return datetime.now(timezone.utc)
+def now():
+    return datetime.now(tz)
 
 
-def format_il(dt_utc: datetime) -> str:
-    if dt_utc is None:
-        return ""
-    il = dt_utc.astimezone(IL_TZ)
-    return il.strftime("%H:%M:%S %d.%m.%Y")
-
-
-def seconds_to_hms(total: int) -> str:
-    total = max(0, int(total))
-    h = total // 3600
-    m = (total % 3600) // 60
-    s = total % 60
-    return f"{h:02d}:{m:02d}:{s:02d}"
-
-
-def normalize_duration(h, m, s) -> int:
-    try:
-        h = int(h or 0)
-        m = int(m or 0)
-        s = int(s or 0)
-    except Exception:
-        return 0
-    if h < 0 or m < 0 or s < 0:
-        return 0
-    return h * 3600 + m * 60 + s
-
-
-# ========= ROUTES =========
-
-@app.get("/")
+@app.route("/")
 def index():
-    if os.path.exists("index.html"):
-        with open("index.html", "r", encoding="utf-8") as f:
-            html = f.read()
-        return make_response(html)
-    else:
-        return render_template_string("""
-            <html><body><h1>🚀 השרת רץ</h1>
-            <p>אבל index.html לא נמצא. ודא שהעלית אותו!</p>
-            </body></html>
-        """)
+    return render_template("index.html")
 
 
-@app.get("/ping")
-def ping():
-    return "ok", 200
+@app.route("/add", methods=["POST"])
+def add_task():
+    data = request.json
+    name = data.get("name")
+    hours = int(data.get("hours", 0))
+    minutes = int(data.get("minutes", 0))
+    seconds = int(data.get("seconds", 0))
+    duration = timedelta(hours=hours, minutes=minutes, seconds=seconds)
+
+    task = {
+        "id": len(tasks) + 1,
+        "name": name,
+        "duration": duration.total_seconds(),
+        "remaining": duration.total_seconds(),
+        "start_time": None,
+        "end_time": None,
+        "status": "pending",
+    }
+    tasks.append(task)
+    return jsonify({"message": "משימה נוספה", "task": task})
 
 
-# כאן באים כל שאר ה־routes (state, tasks, start, pause, reset, update, delete)
-# בדיוק מהקוד המלא ששלחתי לך בהודעה הקודמת – הם נשארים אותו דבר.
+@app.route("/start/<int:task_id>", methods=["POST"])
+def start_task(task_id):
+    for t in tasks:
+        if t["id"] == task_id:
+            if t["status"] in ["pending", "paused"]:
+                t["start_time"] = now()
+                t["end_time"] = now() + timedelta(seconds=t["remaining"])
+                t["status"] = "running"
+            break
+    return jsonify(tasks)
+
+
+@app.route("/pause/<int:task_id>", methods=["POST"])
+def pause_task(task_id):
+    for t in tasks:
+        if t["id"] == task_id and t["status"] == "running":
+            # לחשב כמה זמן נשאר ברגע העצירה
+            t["remaining"] = (t["end_time"] - now()).total_seconds()
+            t["status"] = "paused"
+            t["start_time"] = None
+            t["end_time"] = None
+            break
+    return jsonify(tasks)
+
+
+@app.route("/reset/<int:task_id>", methods=["POST"])
+def reset_task(task_id):
+    for t in tasks:
+        if t["id"] == task_id:
+            # לאפס לזמן המקורי
+            t["remaining"] = t["duration"]
+            t["status"] = "pending"
+            t["start_time"] = None
+            t["end_time"] = None
+            break
+    return jsonify(tasks)
+
+
+@app.route("/delete/<int:task_id>", methods=["POST"])
+def delete_task(task_id):
+    global tasks
+    tasks = [t for t in tasks if t["id"] != task_id]
+    return jsonify({"message": "משימה נמחקה", "tasks": tasks})
+
+
+@app.route("/state")
+def state():
+    # מחשב כמה זמן נשאר לכל משימה
+    for t in tasks:
+        if t["status"] == "running":
+            remaining = (t["end_time"] - now()).total_seconds()
+            if remaining <= 0:
+                t["remaining"] = 0
+                t["status"] = "done"
+                t["start_time"] = None
+                t["end_time"] = None
+                # מפעיל אוטומטית את המשימה הבאה
+                next_index = tasks.index(t) + 1
+                if next_index < len(tasks):
+                    next_task = tasks[next_index]
+                    if next_task["status"] == "pending":
+                        next_task["start_time"] = now()
+                        next_task["end_time"] = now() + timedelta(
+                            seconds=next_task["remaining"]
+                        )
+                        next_task["status"] = "running"
+            else:
+                t["remaining"] = remaining
+    return jsonify(tasks)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
