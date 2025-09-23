@@ -7,17 +7,17 @@
     <style>
         body {
             font-family: Arial, sans-serif;
-            text-align: center;
             direction: rtl;
             margin: 20px;
+            text-align: center;
         }
         table {
             border-collapse: collapse;
+            width: 95%;
             margin: auto;
-            width: 90%;
         }
-        table, th, td {
-            border: 1px solid black;
+        th, td {
+            border: 1px solid #333;
             padding: 8px;
         }
         th {
@@ -27,25 +27,37 @@
             margin: 2px;
         }
         .input-row {
-            margin: 15px;
+            margin: 20px;
         }
         .input-row input {
             width: 60px;
             text-align: center;
         }
+        #overallEnd {
+            margin: 20px;
+            font-weight: bold;
+            font-size: 18px;
+        }
     </style>
 </head>
 <body>
     <h2>טיימר משימות</h2>
+
     <div class="input-row">
         <form id="taskForm">
-            שם משימה: <input type="text" name="name" value="משימה חדשה">
-            שעות: <input type="number" name="hours" min="0" value="0">
-            דקות: <input type="number" name="minutes" min="0" value="0">
-            שניות: <input type="number" name="seconds" min="0" value="0">
-            <button type="submit">הוסף</button>
+            שם משימה:
+            <input type="text" name="name" value="משימה חדשה">
+            שעות:
+            <input type="number" name="hours" min="0" value="0">
+            דקות:
+            <input type="number" name="minutes" min="0" value="0">
+            שניות:
+            <input type="number" name="seconds" min="0" value="0">
+            <button type="submit">➕ הוסף</button>
         </form>
     </div>
+
+    <div id="overallEnd"></div>
 
     <table>
         <thead>
@@ -53,7 +65,7 @@
                 <th>שם</th>
                 <th>סטטוס</th>
                 <th>שעת סיום</th>
-                <th>נותר (שניות)</th>
+                <th>זמן נותר (שניות)</th>
                 <th>פעולות</th>
             </tr>
         </thead>
@@ -62,40 +74,37 @@
 
     <script>
         function loadState() {
-            $.get("/state", function(data) {
+            $.get("/state", function(resp) {
                 $("#taskTable").empty();
-                data.forEach(function(task) {
+
+                resp.tasks.forEach(function(task) {
                     let row = "<tr>";
-                    row += "<td>" + task.name + "</td>";
+                    row += "<td contenteditable='true' onblur='editTask(" + task.id + ", this)'>" + task.name + "</td>";
                     row += "<td>" + task.status + "</td>";
                     row += "<td>" + (task.end_time || "") + "</td>";
                     row += "<td>" + (task.remaining !== null ? task.remaining : "") + "</td>";
                     row += "<td>";
-                    row += "<button onclick='startTask(" + task.id + ")'>התחל</button>";
-                    row += "<button onclick='pauseTask(" + task.id + ")'>השהה</button>";
-                    row += "<button onclick='resetTask(" + task.id + ")'>אפס</button>";
-                    row += "<button onclick='deleteTask(" + task.id + ")'>מחק</button>";
+                    row += "<button onclick='startTask(" + task.id + ")'>▶️ התחל</button>";
+                    row += "<button onclick='pauseTask(" + task.id + ")'>⏸️ השהה</button>";
+                    row += "<button onclick='resetTask(" + task.id + ")'>🔄 איפוס</button>";
+                    row += "<button onclick='deleteTask(" + task.id + ")'>🗑️ מחק</button>";
                     row += "</td>";
                     row += "</tr>";
                     $("#taskTable").append(row);
                 });
+
+                $("#overallEnd").text("שעת סיום כוללת: " + resp.overall_end);
             });
         }
 
-        function startTask(id) {
-            $.get("/start/" + id, loadState);
-        }
+        function startTask(id) { $.get("/start/" + id, loadState); }
+        function pauseTask(id) { $.get("/pause/" + id, loadState); }
+        function resetTask(id) { $.get("/reset/" + id, loadState); }
+        function deleteTask(id) { $.get("/delete/" + id, loadState); }
 
-        function pauseTask(id) {
-            $.get("/pause/" + id, loadState);
-        }
-
-        function resetTask(id) {
-            $.get("/reset/" + id, loadState);
-        }
-
-        function deleteTask(id) {
-            $.get("/delete/" + id, loadState);
+        function editTask(id, elem) {
+            const name = $(elem).text();
+            $.post("/edit/" + id, { name: name, hours: 0, minutes: 0, seconds: 0 }, loadState);
         }
 
         $("#taskForm").submit(function(e) {
@@ -105,7 +114,7 @@
             });
         });
 
-        // עדכון טבלה כל שנייה
+        // טיימר אוטומטי לרענון
         setInterval(loadState, 1000);
         loadState();
     </script>
