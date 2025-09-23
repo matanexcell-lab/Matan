@@ -1,299 +1,104 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8" />
-  <title>טיימר משימות</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <style>
-    body { font-family: Arial, sans-serif; padding: 14px; }
-    h1 { margin: 0 0 12px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-    th, td { border: 1px solid #ccc; padding: 8px; text-align: center; }
-    th { background: #f3f3f3; }
-    .actions button { margin: 2px; }
-    .muted { opacity: .7; }
-    .running { background: #e7f7ff; }
-    .done { background: #eef7ea; }
-    .warn { color: #c00; font-weight: bold; }
-    input[type=number] { width: 60px; }
-    input[name=name] { width: 160px; }
-    .row-editing { outline: 2px dashed #999; }
-  </style>
+    <meta charset="UTF-8">
+    <title>ניהול משימות</title>
+    <style>
+        body { font-family: Arial, sans-serif; direction: rtl; text-align: center; }
+        table { margin: auto; border-collapse: collapse; width: 80%; }
+        th, td { border: 1px solid black; padding: 8px; }
+        button { margin: 2px; }
+    </style>
 </head>
 <body>
+    <h1>ניהול משימות</h1>
 
-  <h1>טיימר משימות</h1>
+    <h3>הוספת משימה</h3>
+    <input id="name" placeholder="שם משימה">
+    <input id="hours" type="number" placeholder="שעות" min="0">
+    <input id="minutes" type="number" placeholder="דקות" min="0">
+    <input id="seconds" type="number" placeholder="שניות" min="0">
+    <button onclick="addTask()">הוסף</button>
 
-  <div>
-    שם משימה חדש:
-    <input id="newName" name="name" placeholder="שם" />
-    שעות: <input id="newH" type="number" min="0" value="0">
-    דקות: <input id="newM" type="number" min="0" value="0">
-    שניות: <input id="newS" type="number" min="0" value="0">
-    <button id="btnAdd">הוסף</button>
-  </div>
-
-  <div style="margin-top:8px;">
-    <b>שעה נוכחית:</b> <span id="now_il">--:--</span>
-    &nbsp;&nbsp;|&nbsp;&nbsp;
-    <b>שעת סיום כוללת:</b> <span id="end_all">--:--</span>
-  </div>
-
-  <table id="tbl">
-    <thead>
-      <tr>
-        <th>שם</th>
-        <th>סטטוס</th>
-        <th>זמן התחלתי</th>
-        <th>שעת סיום</th>
-        <th>נותר</th>
-        <th>פעולות</th>
-      </tr>
-    </thead>
-    <tbody id="tbody"></tbody>
-  </table>
+    <h3>רשימת משימות</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>שם</th>
+                <th>זמן נשאר</th>
+                <th>סטטוס</th>
+                <th>פעולות</th>
+            </tr>
+        </thead>
+        <tbody id="taskTable"></tbody>
+    </table>
 
 <script>
-let cache = {tasks:[], now_il:"", end_all:""};
-let editingTaskId = null;
-let hardRefreshTimer = null;
-let softTickTimer = null;
+async function addTask() {
+    const name = document.getElementById("name").value;
+    const hours = document.getElementById("hours").value || 0;
+    const minutes = document.getElementById("minutes").value || 0;
+    const seconds = document.getElementById("seconds").value || 0;
 
-// ---------- helpers ----------
-function pad(n){ return String(n).padStart(2,'0'); }
-function hms(total){
-  total = Math.max(0, Math.floor(total));
-  const h = Math.floor(total/3600);
-  const m = Math.floor((total%3600)/60);
-  const s = total%60;
-  return `${pad(h)}:${pad(m)}:${pad(s)}`;
-}
-function qs(id){ return document.getElementById(id); }
-
-async function api(path, method="GET", payload=null){
-  const opt = {method, headers:{"Content-Type":"application/json"}};
-  if(payload) opt.body = JSON.stringify(payload);
-  const res = await fetch(path, opt);
-  if(!res.ok) throw new Error("API error");
-  return await res.json();
-}
-
-// ---------- rendering ----------
-function render(){
-  qs("now_il").textContent = cache.now_il || "--:--";
-  qs("end_all").textContent = cache.end_all || "--:--";
-
-  const tb = qs("tbody");
-  tb.innerHTML = "";
-  cache.tasks.forEach(t => {
-    const tr = document.createElement("tr");
-    tr.dataset.id = t.id;
-    tr.className = `${t.status} ${editingTaskId===t.id?'row-editing':''}`;
-
-    // name (editable when NOT running)
-    const tdName = document.createElement("td");
-    const nameInput = document.createElement("input");
-    nameInput.name = "name";
-    nameInput.value = t.name;
-    nameInput.disabled = (t.status==="running");
-    nameInput.addEventListener("input", () => {
-      // do not auto-save; save on "עדכן זמן"
+    await fetch("/add", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, hours, minutes, seconds })
     });
-    tdName.appendChild(nameInput);
-
-    // status
-    const tdStatus = document.createElement("td");
-    tdStatus.textContent = t.status==="ready" ? "ממתין" :
-                            t.status==="running" ? "פעילה" :
-                            t.status==="paused" ? "מושהית" : "הסתיימה";
-
-    // initial
-    const tdInit = document.createElement("td");
-    tdInit.textContent = t.initial_str;
-
-    // predicted end
-    const tdEnd = document.createElement("td");
-    tdEnd.textContent = t.predicted_end || "";
-
-    // remaining (live)
-    const tdRemain = document.createElement("td");
-    tdRemain.textContent = t.remaining_str;
-    tdRemain.className = "remain";
-
-    // actions
-    const tdAct = document.createElement("td");
-    tdAct.className = "actions";
-
-    const bStart = document.createElement("button");
-    bStart.textContent = "התחל";
-    bStart.disabled = (t.status==="running");
-    bStart.onclick = async () => { await api(`/start/${t.id}`, "POST"); await hardRefresh(); };
-
-    const bPause = document.createElement("button");
-    bPause.textContent = "השהה";
-    bPause.disabled = (t.status!=="running");
-    bPause.onclick = async () => { await api(`/pause/${t.id}`, "POST"); await hardRefresh(); };
-
-    const bReset = document.createElement("button");
-    bReset.textContent = "איפוס";
-    bReset.onclick = async () => { await api(`/reset/${t.id}`, "POST"); await hardRefresh(); };
-
-    const bDelete = document.createElement("button");
-    bDelete.textContent = "מחק";
-    bDelete.onclick = async () => { await api(`/delete/${t.id}`, "POST"); await hardRefresh(); };
-
-    // edit controls (only if NOT running)
-    const canEdit = (t.status!=="running");
-    const bEdit = document.createElement("button");
-    bEdit.textContent = editingTaskId===t.id ? "בטל עריכה" : "ערוך זמן";
-    bEdit.disabled = !canEdit;
-    bEdit.onclick = () => {
-      editingTaskId = (editingTaskId===t.id ? null : t.id);
-      render();
-    };
-
-    tdAct.appendChild(bStart);
-    tdAct.appendChild(bPause);
-    tdAct.appendChild(bReset);
-    tdAct.appendChild(bDelete);
-    tdAct.appendChild(bEdit);
-
-    // if editing this row -> show H/M/S inputs + 'עדכן זמן'
-    if (editingTaskId === t.id && canEdit) {
-      const parts = t.initial_str.split(":").map(x=>parseInt(x,10));
-      const eH = document.createElement("input"); eH.type="number"; eH.min=0; eH.value = parts[0];
-      const eM = document.createElement("input"); eM.type="number"; eM.min=0; eM.value = parts[1];
-      const eS = document.createElement("input"); eS.type="number"; eS.min=0; eS.value = parts[2];
-      eH.style.marginRight="6px"; eM.style.marginRight="6px"; eS.style.marginRight="6px";
-
-      const bSave = document.createElement("button");
-      bSave.textContent = "עדכן זמן/שם";
-      bSave.onclick = async () => {
-        const payload = {
-          name: nameInput.value,
-          h: parseInt(eH.value||0,10),
-          m: parseInt(eM.value||0,10),
-          s: parseInt(eS.value||0,10)
-        };
-        await api(`/update/${t.id}`, "POST", payload);
-        editingTaskId = null;
-        await hardRefresh();
-      };
-
-      // put editors into "initial" column (visually nice)
-      tdInit.innerHTML = "";
-      tdInit.appendChild(eH);
-      tdInit.appendChild(document.createTextNode(" : "));
-      tdInit.appendChild(eM);
-      tdInit.appendChild(document.createTextNode(" : "));
-      tdInit.appendChild(eS);
-
-      tdAct.appendChild(bSave);
-    }
-
-    tr.appendChild(tdName);
-    tr.appendChild(tdStatus);
-    tr.appendChild(tdInit);
-    tr.appendChild(tdEnd);
-    tr.appendChild(tdRemain);
-    tr.appendChild(tdAct);
-    tb.appendChild(tr);
-  });
+    loadTasks();
 }
 
-// Only update timers (no DOM rebuild) – unless a row is in edit mode
-function softTick(){
-  if (editingTaskId !== null) return; // don't fight the inputs
-
-  // Advance remaining seconds & recompute predicted ends locally
-  // Identify running task
-  const runningIdx = cache.tasks.findIndex(t => t.status === "running");
-  const nowPlus = 1; // one second tick
-
-  let cursorShift = 0;
-  let newEndAll = null;
-
-  cache.tasks = cache.tasks.map((t, idx) => {
-    const c = {...t};
-    if (t.status === "running") {
-      const newRem = Math.max(0, parseTime(c.remaining_str) - 1);
-      c.remaining_str = hms(newRem);
-      if (newRem === 0) {
-        // allow server to flip to next on next /state
-      }
-      cursorShift = newRem;
-      c.predicted_end = shiftTimeStr(cache.now_il, newRem);
-    } else if (t.status === "ready" || t.status === "paused") {
-      // its predicted end is after the running remainder plus
-      // the sum of previous ready/paused remainders; we only approximate here
-      const baseAdd = (runningIdx >= 0 && idx > runningIdx) ? cursorShift : 0;
-      const mySeconds = parseTime(c.remaining_str);
-      const approx = (baseAdd + mySeconds);
-      c.predicted_end = shiftTimeStr(cache.now_il, approx);
-      cursorShift += mySeconds;
-    }
-    newEndAll = shiftTimeStr(cache.now_il, cursorShift);
-    return c;
-  });
-
-  cache.end_all = newEndAll || cache.end_all;
-  // update text in-place
-  qs("end_all").textContent = cache.end_all;
-  document.querySelectorAll("#tbody tr").forEach((tr, i) => {
-    const rcell = tr.querySelector(".remain");
-    if (rcell) rcell.textContent = cache.tasks[i].remaining_str;
-    tr.children[3].textContent = cache.tasks[i].predicted_end || "";
-  });
+async function startTask(id) {
+    await fetch("/start/" + id, { method: "POST" });
+    loadTasks();
 }
 
-function parseTime(hmsStr){
-  // "HH:MM:SS" -> seconds
-  const [h,m,s] = hmsStr.split(":").map(x=>parseInt(x,10)||0);
-  return h*3600+m*60+s;
+async function pauseTask(id) {
+    await fetch("/pause/" + id, { method: "POST" });
+    loadTasks();
 }
 
-function shiftTimeStr(nowStrIl, addSec){
-  // nowStrIl: "HH:MM:SS dd.mm.yyyy" OR "HH:MM:SS ..." -> we only care HH:MM:SS
-  const hhmmss = (nowStrIl||"00:00:00").split(" ")[0];
-  const parts = hhmmss.split(":").map(x=>parseInt(x,10)||0);
-  let sec = parts[0]*3600 + parts[1]*60 + parts[2] + addSec;
-  if (sec < 0) sec = 0;
-  const h = Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
-  return `${pad(h)}:${pad(m)}:${pad(s)} ${new Date().toLocaleDateString('he-IL')}`;
+async function resetTask(id) {
+    await fetch("/reset/" + id, { method: "POST" });
+    loadTasks();
 }
 
-// ---------- data flow ----------
-async function hardRefresh(){
-  const data = await api("/state");
-  cache = data;
-  render();
+async function deleteTask(id) {
+    await fetch("/delete/" + id, { method: "POST" });
+    loadTasks();
 }
 
-async function init(){
-  qs("btnAdd").onclick = async () => {
-    const payload = {
-      name: qs("newName").value,
-      h: parseInt(qs("newH").value||0,10),
-      m: parseInt(qs("newM").value||0,10),
-      s: parseInt(qs("newS").value||0,10),
-    };
-    await api("/tasks", "POST", payload);
-    qs("newName").value = "";
-    await hardRefresh();
-  };
-
-  await hardRefresh();
-
-  if (hardRefreshTimer) clearInterval(hardRefreshTimer);
-  if (softTickTimer) clearInterval(softTickTimer);
-  // רענון קשיח מהשרת כל 8 שניות (מתקן פערים ואוטו־סטארט למשימה הבאה)
-  hardRefreshTimer = setInterval(hardRefresh, 8000);
-  // טיק רך כל שנייה להצגת זמן נותר חי
-  softTickTimer = setInterval(softTick, 1000);
+async function loadTasks() {
+    const res = await fetch("/state");
+    const tasks = await res.json();
+    const tbody = document.getElementById("taskTable");
+    tbody.innerHTML = "";
+    tasks.forEach(t => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+            <td>${t.name}</td>
+            <td>${formatTime(t.remaining)}</td>
+            <td>${t.status}</td>
+            <td>
+                <button onclick="startTask(${t.id})">התחל</button>
+                <button onclick="pauseTask(${t.id})">השהה</button>
+                <button onclick="resetTask(${t.id})">אפס</button>
+                <button onclick="deleteTask(${t.id})">מחק</button>
+            </td>
+        `;
+        tbody.appendChild(row);
+    });
 }
 
-window.addEventListener("load", init);
+function formatTime(seconds) {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = Math.floor(seconds % 60);
+    return `${h}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+
+setInterval(loadTasks, 1000);
+loadTasks();
 </script>
-
 </body>
 </html>
