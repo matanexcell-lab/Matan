@@ -27,14 +27,20 @@ def hhmmss(total_seconds: float) -> str:
 
 
 def recompute_chain():
+    """
+    מעדכן טיימרים, מסיים משימה שהגיעה ל-0,
+    ומפעיל אוטומטית את הבאה בתור.
+    """
     for idx, t in enumerate(tasks):
         if t["status"] == "running":
             remaining = (t["end_time"] - now()).total_seconds()
             if remaining <= 0:
+                # סיום משימה
                 t["remaining"] = 0
                 t["status"] = "done"
                 t["start_time"] = None
                 t["end_time"] = None
+                # הפעלה אוטומטית של הבאה
                 if idx + 1 < len(tasks):
                     nxt = tasks[idx + 1]
                     if nxt["status"] == "pending":
@@ -46,6 +52,9 @@ def recompute_chain():
 
 
 def overall_end_time():
+    """
+    מחשב שעת סיום כוללת: סוף הרצה + סכום הנותר של Pending/Paused.
+    """
     if not tasks:
         return None
 
@@ -89,16 +98,32 @@ def add_task():
     return jsonify({"ok": True, "task": task})
 
 
+def any_running():
+    return any(t["status"] == "running" for t in tasks)
+
+def any_active():
+    return any(t["status"] in ("running", "paused") for t in tasks)
+
+
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
-    active_exists = any(t["status"] in ("running", "paused") for t in tasks)
+    """
+    התחלה:
+    - מותר להתחיל Pending רק אם אין משימה רצה.
+    - מותר להמשיך Paused רק אם אין משימה רצה.
+    - מותר להפעיל שוב Done רק אם אין משימות פעילות בכלל (לא running ולא paused).
+    """
     for t in tasks:
         if t["id"] == task_id:
-            if t["status"] in ("pending", "paused"):
+            if t["status"] == "pending" and not any_running():
                 t["start_time"] = now()
                 t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
                 t["status"] = "running"
-            elif t["status"] == "done" and not active_exists:
+            elif t["status"] == "paused" and not any_running():
+                t["start_time"] = now()
+                t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
+                t["status"] = "running"
+            elif t["status"] == "done" and not any_active():
                 t["remaining"] = t["duration"]
                 t["start_time"] = now()
                 t["end_time"] = t["start_time"] + timedelta(seconds=t["duration"])
@@ -140,6 +165,9 @@ def delete_task(task_id):
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
+    """
+    עריכת שם/זמן מותרת כשהמשימה לא רצה.
+    """
     data = request.json or {}
     for t in tasks:
         if t["id"] == task_id and t["status"] in ("pending", "paused", "done"):
@@ -164,6 +192,10 @@ def update_task(task_id):
 
 @app.route("/extend/<int:task_id>", methods=["POST"])
 def extend_task(task_id):
+    """
+    הארכת משימה — מוסיף שניות ל-duration ול-remaining.
+    אם רצה: end_time זז קדימה וה-remaining מתעדכן.
+    """
     data = request.json or {}
     extra = int(data.get("seconds") or 0)
     if extra <= 0:
@@ -184,6 +216,9 @@ def extend_task(task_id):
 
 @app.route("/skip/<int:task_id>", methods=["POST"])
 def skip_task(task_id):
+    """
+    דלג: מסמן המשימה הנוכחית כ- done ומפעיל אוטומטית את הבאה בתור (אם קיימת).
+    """
     for idx, t in enumerate(tasks):
         if t["id"] == task_id and t["status"] == "running":
             t["remaining"] = 0
@@ -196,6 +231,24 @@ def skip_task(task_id):
                     nxt["start_time"] = now()
                     nxt["end_time"] = nxt["start_time"] + timedelta(seconds=nxt["remaining"])
                     nxt["status"] = "running"
+            break
+    return jsonify({"ok": True})
+
+
+@app.route("/set_pending/<int:task_id>", methods=["POST"])
+def set_pending(task_id):
+    """
+    הפיכת משימה ל-Pending (רק אם לא רצה):
+    - מ- done: remaining = duration
+    - מ- paused: שומר remaining כפי שהוא
+    """
+    for t in tasks:
+        if t["id"] == task_id and t["status"] in ("paused", "done", "pending"):
+            if t["status"] == "done":
+                t["remaining"] = t["duration"]
+            t["status"] = "pending"
+            t["start_time"] = None
+            t["end_time"] = None
             break
     return jsonify({"ok": True})
 
