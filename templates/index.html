@@ -16,7 +16,7 @@
     .paused { background:#fff0b3; }
     .pending { background:#f2f2f2; }
     .done { background:#e6e6e6; text-decoration: line-through; color:#666; }
-    .actions button { margin: 0 2px; }
+    .actions button { margin: 2px; }
   </style>
 </head>
 <body>
@@ -57,15 +57,7 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
-let editingId = null;  // מזהה אם יש שורה בעריכה
-
-function fmtHHMMSS(totalSeconds) {
-  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}
+let editingId = null;
 
 async function api(url, method="GET", body=null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
@@ -88,9 +80,13 @@ async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
 async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
 
+async function extendTask(id, seconds){
+  await api(`/extend/${id}`, "POST", { seconds });
+}
+
 function editTask(id){
   editingId = id;
-  render(); // מרנדר מחדש את הטבלה עם שורה בעריכה
+  render();
 }
 
 async function saveEdit(id){
@@ -112,6 +108,14 @@ function cancelEdit(){
   render();
 }
 
+function fmtHHMMSS(totalSeconds) {
+  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
 function statusClass(st){
   if (st === "running") return "badge running";
   if (st === "paused")  return "badge paused";
@@ -131,10 +135,9 @@ async function render() {
     tr.id = `row-${t.id}`;
     tr.className = t.status;
 
-    // מצב עריכה?
     if(editingId === t.id){
       tr.innerHTML = `
-        <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}"></td>
+        <td><input class="edit-name" type="text" value="${t.name}"></td>
         <td class="muted">${fmtHHMMSS(t.duration)}</td>
         <td><strong>${t.remaining_hhmmss}</strong></td>
         <td>${t.end_time_str || "-"}</td>
@@ -147,39 +150,4 @@ async function render() {
           <button onclick="cancelEdit()">בטל</button>
         </td>
         <td class="actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
-        </td>
-      `;
-    } else {
-      tr.innerHTML = `
-        <td>${t.name}</td>
-        <td class="muted">${fmtHHMMSS(t.duration)}</td>
-        <td><strong>${t.remaining_hhmmss}</strong></td>
-        <td>${t.end_time_str || "-"}</td>
-        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-        <td>
-          ${(t.status !== "running") ? `<button onclick="editTask(${t.id})">ערוך</button>` : `<span class="muted">נמנע</span>`}
-        </td>
-        <td class="actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
-        </td>
-      `;
-    }
-
-    tb.appendChild(tr);
-  });
-}
-
-// פולינג כל שנייה + כפתור הוספה
-setInterval(() => { if(editingId===null) render(); }, 1000);
-render();
-document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
-</script>
-</body>
-</html>
+          <button onclick="startTask(${t.id})
