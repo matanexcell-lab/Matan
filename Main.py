@@ -66,11 +66,10 @@ def overall_end_time():
     base = now()
     for t in tasks:
         if t["status"] == "running" and t["end_time"]:
-            # השעה המאוחרת ביותר של משימה רצה (בדרך כלל תהיה אחת)
             if t["end_time"] > base:
                 base = t["end_time"]
 
-    # הוספת כל הפנדינג (והpaused) לפי הסדר
+    # הוספת כל הפנדינג וה-paused לפי הסדר
     for t in tasks:
         if t["status"] in ("pending", "paused"):
             base = base + timedelta(seconds=max(0, int(t["remaining"])))
@@ -98,8 +97,8 @@ def add_task():
         "name": name,
         "duration": total,        # זמן מקורי בשניות
         "remaining": total,       # זמן נותר דינמי
-        "start_time": None,       # datetime aware
-        "end_time": None,         # datetime aware
+        "start_time": None,
+        "end_time": None,
         "status": "pending"       # pending | running | paused | done
     }
     tasks.append(task)
@@ -134,7 +133,6 @@ def reset_task(task_id):
     for t in tasks:
         if t["id"] == task_id:
             t["remaining"] = t["duration"]
-            # איפוס + התחלה מחדש אוטומטית
             t["start_time"] = now()
             t["end_time"] = t["start_time"] + timedelta(seconds=t["remaining"])
             t["status"] = "running"
@@ -152,8 +150,7 @@ def delete_task(task_id):
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
     """
-    עדכון שם וזמן התחלתי — **רק אם המשימה לא פעילה**.
-    קלט: name (אופציונלי), hours/minutes/seconds (אופציונלי)
+    עדכון שם וזמן התחלתי — רק אם המשימה לא פעילה (לא running).
     """
     data = request.json or {}
     for t in tasks:
@@ -169,29 +166,25 @@ def update_task(task_id):
                 seconds = int(data.get("seconds") or 0)
                 total = max(0, hours * 3600 + minutes * 60 + seconds)
                 t["duration"] = total
+                t["remaining"] = total
                 # אם היא done – נחזיר ל-pending עם הזמן החדש
                 if t["status"] == "done":
                     t["status"] = "pending"
-                t["remaining"] = total
                 t["start_time"] = None
                 t["end_time"] = None
             break
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "task": t})
 
 
 @app.route("/state")
 def state():
-    # מעדכן ריצות/רצף
     recompute_chain()
-
-    # מחשב שעת סיום כוללת
     end_all = overall_end_time()
     if end_all:
         end_all_str = end_all.strftime("%H:%M:%S %d.%m.%Y")
     else:
         end_all_str = "-"
 
-    # החזרה ללקוח
     payload = []
     for t in tasks:
         payload.append({
