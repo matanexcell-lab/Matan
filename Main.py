@@ -3,12 +3,13 @@ from datetime import datetime, timedelta
 from flask import Flask, jsonify, request, render_template
 import pytz
 
+# ===== Settings =====
 DB_FILE = "tasks.db"
 TZ = pytz.timezone("Asia/Jerusalem")
 
 app = Flask(__name__)
 
-# ------------- DB utils -------------
+# ===== DB utils =====
 def db():
     conn = sqlite3.connect(DB_FILE)
     conn.row_factory = sqlite3.Row
@@ -32,6 +33,7 @@ def init_db():
 
 def row2dict(r): return dict(r)
 
+# ===== Time helpers =====
 def now():
     return datetime.now(TZ)
 
@@ -42,7 +44,6 @@ def from_iso(s):
     if not s: return None
     return datetime.fromisoformat(s)
 
-# ------------- core helpers -------------
 def hhmmss(total_seconds):
     if total_seconds is None: return ""
     total_seconds = max(0, int(total_seconds))
@@ -51,6 +52,7 @@ def hhmmss(total_seconds):
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+# ===== CRUD helpers =====
 def fetch_all():
     conn = db()
     c = conn.cursor()
@@ -100,73 +102,59 @@ def any_running():
 def any_active():
     return any(t["status"] in ("running","paused") for t in fetch_all())
 
+# ===== Chain logic =====
 def recompute_chain_in_db():
     """
-    מעדכן remaining עבור רצות, מסיים אם עבר זמן, ומפעיל אוטומטית את הבאה.
-    רץ בכל /state (פעם בשניה מצד הלקוח).
+    מעדכן remaining לרצות, מסיים כשעבר end_time,
+    ומדליק אוטומטית את המשימה הבאה (pending) לפי הסדר.
     """
     tasks = fetch_all()
-    changed = False
     now_ts = now()
 
-    # עדכן running
     for t in tasks:
         if t["status"] == "running" and t["end_time"]:
             et = from_iso(t["end_time"])
             rem = int((et - now_ts).total_seconds())
             if rem <= 0:
-                # סיים משימה
+                # סיים
                 t["remaining"] = 0
                 t["status"] = "done"
                 t["end_time"] = None
                 save_task(t)
-                changed = True
 
-                # הפעל את הבאה בתור (pending הראשונה אחרי)
+                # הפעל את הבאה
                 tasks2 = fetch_all()
-                # מצא את האינדקס של המשימה שזה עתה הסתיימה ברשימה העדכנית
                 ids = [x["id"] for x in tasks2]
-                if t["id"] in ids:
-                    idx = ids.index(t["id"])
-                else:
-                    # אם נמחקה בינתיים (נדיר), קח הבאה הראשונה pending
-                    idx = -1
-                # אם יש "אחרי" ומשימתה pending, הפעל
+                idx = ids.index(t["id"]) if t["id"] in ids else -1
                 if idx != -1 and idx + 1 < len(tasks2):
-                    nxt = tasks2[idx+1]
-                    if nxt["status"] == "pending":
+                    nxt = fetch_one(tasks2[idx+1]["id"])
+                    if nxt and nxt["status"] == "pending":
                         nxt["end_time"] = to_iso(now_ts + timedelta(seconds=int(nxt["remaining"])))
                         nxt["status"] = "running"
                         save_task(nxt)
             else:
+                # עדכון remaining "חי"
                 if rem != t["remaining"]:
                     t["remaining"] = rem
                     save_task(t)
-
-    if changed:
-        # הצצה נוספת לאיזון השרשרת
-        pass
 
 def overall_end_time_calc():
     tasks = fetch_all()
     if not tasks: return None
     base = now()
-
-    # אם יש רצה – קח את end_time המאוחר ביותר
+    # קח את סוף הרצה הנוכחית (אם יש)
     for t in tasks:
         if t["status"] == "running" and t["end_time"]:
             et = from_iso(t["end_time"])
             if et and et > base:
                 base = et
-
-    # הוסף pending/paused לפי הסדר
+    # הוסף Pending/Paused לפי הסדר
     for t in tasks:
-        if t["status"] in ("pending","paused"):
+        if t["status"] in ("pending", "paused"):
             base = base + timedelta(seconds=int(max(0, int(t["remaining"]))))
-
     return base
 
-# ------------- routes -------------
+# ===== Routes =====
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -175,7 +163,7 @@ def index():
 def add():
     data = request.json or {}
     name = (data.get("name") or "").strip() or "משימה"
-    # תמיכה בשעות/דקות/שניות או duration
+    # תמיכה ב־hours/minutes/seconds או duration
     hours   = int(data.get("hours") or 0)
     minutes = int(data.get("minutes") or 0)
     seconds = int(data.get("seconds") or 0)
@@ -190,12 +178,12 @@ def start(task_id):
     if not t:
         return jsonify({"ok": False, "error": "not found"}), 404
 
-    # pending/paused: מותר רק אם אין רצה אחרת
+    # Pending/Paused: רק אם אין רצה אחרת
     if t["status"] in ("pending","paused") and not any_running():
         t["end_time"] = to_iso(now() + timedelta(seconds=int(t["remaining"])))
         t["status"] = "running"
         save_task(t)
-    # done: מותר רק אם אין משימות פעילות בכלל
+    # Done: רק אם אין משימות פעילות כלל
     elif t["status"] == "done" and not any_active():
         t["remaining"] = int(t["duration"])
         t["end_time"] = to_iso(now() + timedelta(seconds=int(t["remaining"])))
@@ -244,8 +232,7 @@ def update(task_id):
     data = request.json or {}
     if "name" in data:
         nm = (data.get("name") or "").strip()
-        if nm:
-            t["name"] = nm
+        if nm: t["name"] = nm
 
     if any(k in data for k in ("hours","minutes","seconds","duration")):
         hours   = int(data.get("hours") or 0)
@@ -275,7 +262,6 @@ def extend(task_id):
 
     t["duration"] = int(t["duration"]) + extra
     if t["status"] == "running" and t["end_time"]:
-        # עדכן remaining לפי end_time העדכני
         et = from_iso(t["end_time"])
         rem = max(0, int((et - now()).total_seconds()))
         t["remaining"] = rem + extra
@@ -288,7 +274,6 @@ def extend(task_id):
 
 @app.route("/skip/<int:task_id>", methods=["POST"])
 def skip(task_id):
-    # סמן המשימה כרצה → done והפעל את הבאה (pending)
     t = fetch_one(task_id)
     if t and t["status"] == "running":
         t["status"] = "done"
@@ -322,12 +307,11 @@ def set_pending(task_id):
 
 @app.route("/state")
 def state():
-    # מעדכן שרשרת/סיום ויוצר פיילוד ללקוח
+    # עדכן ריצות/רצף ותחזיר מצב מלא
     recompute_chain_in_db()
     tasks = fetch_all()
     payload = []
     for t in tasks:
-        # חישוב remaining "חי" עבור רצות
         rem = int(t["remaining"])
         if t["status"] == "running" and t["end_time"]:
             et = from_iso(t["end_time"])
