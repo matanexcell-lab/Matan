@@ -4,8 +4,8 @@ import pytz
 
 app = Flask(__name__)
 
-# זיכרון זמני (אם תאפס את השרת — זה ייעלם)
-tasks = []  # כל פריט: dict כמפורט למטה
+# זיכרון זמני (נמחק כשמאפסים את השרת)
+tasks = []  # כל משימה = dict
 tz = pytz.timezone("Asia/Jerusalem")
 
 
@@ -28,21 +28,17 @@ def hhmmss(total_seconds: float) -> str:
 
 
 def recompute_chain():
-    """
-    לולאת-שרת קטנה: מעדכנת זמנים נותרו, מסיימת משימות שרצו,
-    ומפעילה אוטומטית את הבאה בתור.
-    נקראת בכל /state (כי אנחנו ממילא שואלים כל שנייה).
-    """
+    """מעדכן זמנים ומפעיל משימה הבאה אוטומטית"""
     for idx, t in enumerate(tasks):
         if t["status"] == "running":
             remaining = (t["end_time"] - now()).total_seconds()
             if remaining <= 0:
-                # סיימנו
+                # סיום משימה
                 t["remaining"] = 0
                 t["status"] = "done"
                 t["start_time"] = None
                 t["end_time"] = None
-                # הפעלה אוטומטית של הבאה
+                # הפעלה של הבאה בתור
                 if idx + 1 < len(tasks):
                     nxt = tasks[idx + 1]
                     if nxt["status"] == "pending":
@@ -54,22 +50,16 @@ def recompute_chain():
 
 
 def overall_end_time():
-    """
-    מחשב את שעת הסיום הכוללת של כל המשימות מתורגם ל-Asia/Jerusalem.
-    אם יש משימה רצה — משתמשים ב-end_time שלה ומוסיפים אחרי זה את כל הפנדינג.
-    אם אין אף אחת רצה — מתחילים מעכשיו.
-    """
+    """חישוב שעת סיום כוללת לכל המשימות"""
     if not tasks:
         return None
 
-    # נקודת התחלה: אם יש רצה — סוף שלה; אחרת עכשיו
     base = now()
     for t in tasks:
         if t["status"] == "running" and t["end_time"]:
             if t["end_time"] > base:
                 base = t["end_time"]
 
-    # הוספת כל הפנדינג וה-paused לפי הסדר
     for t in tasks:
         if t["status"] in ("pending", "paused"):
             base = base + timedelta(seconds=max(0, int(t["remaining"])))
@@ -95,11 +85,11 @@ def add_task():
     task = {
         "id": (tasks[-1]["id"] + 1) if tasks else 1,
         "name": name,
-        "duration": total,        # זמן מקורי בשניות
-        "remaining": total,       # זמן נותר דינמי
+        "duration": total,
+        "remaining": total,
         "start_time": None,
         "end_time": None,
-        "status": "pending"       # pending | running | paused | done
+        "status": "pending"
     }
     tasks.append(task)
     return jsonify({"ok": True, "task": task})
@@ -149,9 +139,7 @@ def delete_task(task_id):
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
-    """
-    עדכון שם וזמן התחלתי — רק אם המשימה לא פעילה (לא running).
-    """
+    """עדכון שם/זמן — מותר כשלא רצה"""
     data = request.json or {}
     for t in tasks:
         if t["id"] == task_id and t["status"] in ("pending", "paused", "done"):
@@ -159,7 +147,6 @@ def update_task(task_id):
                 nm = (data.get("name") or "").strip()
                 t["name"] = nm or t["name"]
 
-            # זמן חדש? נעדכן גם duration וגם remaining בהתאם
             if any(k in data for k in ("hours", "minutes", "seconds")):
                 hours = int(data.get("hours") or 0)
                 minutes = int(data.get("minutes") or 0)
@@ -167,7 +154,6 @@ def update_task(task_id):
                 total = max(0, hours * 3600 + minutes * 60 + seconds)
                 t["duration"] = total
                 t["remaining"] = total
-                # אם היא done – נחזיר ל-pending עם הזמן החדש
                 if t["status"] == "done":
                     t["status"] = "pending"
                 t["start_time"] = None
@@ -180,10 +166,7 @@ def update_task(task_id):
 def state():
     recompute_chain()
     end_all = overall_end_time()
-    if end_all:
-        end_all_str = end_all.strftime("%H:%M:%S %d.%m.%Y")
-    else:
-        end_all_str = "-"
+    end_all_str = end_all.strftime("%H:%M:%S %d.%m.%Y") if end_all else "-"
 
     payload = []
     for t in tasks:
