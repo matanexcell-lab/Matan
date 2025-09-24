@@ -1,6 +1,6 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 from datetime import datetime, timedelta
-import pytz
+import pytz, time, json
 
 app = Flask(__name__)
 
@@ -27,15 +27,11 @@ def hhmmss(total_seconds: float) -> str:
 
 
 def recompute_chain():
-    """
-    מעדכן טיימרים, מסיים משימה שהגיעה ל-0,
-    ומפעיל אוטומטית את הבאה בתור.
-    """
+    """ מעדכן טיימרים, מסיים משימה, ומפעיל אוטומטית את הבאה. """
     for idx, t in enumerate(tasks):
         if t["status"] == "running":
             remaining = (t["end_time"] - now()).total_seconds()
             if remaining <= 0:
-                # סיום משימה
                 t["remaining"] = 0
                 t["status"] = "done"
                 t["start_time"] = None
@@ -52,9 +48,7 @@ def recompute_chain():
 
 
 def overall_end_time():
-    """
-    מחשב שעת סיום כוללת: סוף הרצה + סכום הנותר של Pending/Paused.
-    """
+    """ שעת סיום כוללת: סוף הרצה + סכום remaining של Pending/Paused. """
     if not tasks:
         return None
 
@@ -71,9 +65,60 @@ def overall_end_time():
     return base
 
 
+def any_running():
+    return any(t["status"] == "running" for t in tasks)
+
+
+def any_active():
+    return any(t["status"] in ("running", "paused") for t in tasks)
+
+
+def serialize_state():
+    end_all = overall_end_time()
+    end_all_str = end_all.strftime("%H:%M:%S %d.%m.%Y") if end_all else "-"
+    payload = []
+    for t in tasks:
+        payload.append({
+            "id": t["id"],
+            "name": t["name"],
+            "status": t["status"],
+            "duration": t["duration"],
+            "remaining": max(0, int(t["remaining"])) if t["remaining"] is not None else 0,
+            "remaining_hhmmss": hhmmss(t["remaining"]),
+            "start_time": to_iso(t["start_time"]),
+            "end_time": to_iso(t["end_time"]),
+            "end_time_str": t["end_time"].astimezone(tz).strftime("%H:%M:%S") if t["end_time"] else "-"
+        })
+    return {
+        "ok": True,
+        "tasks": payload,
+        "overall_end_time": end_all_str,
+        "now": now().strftime("%H:%M:%S %d.%m.%Y")
+    }
+
+
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/stream")
+def stream():
+    """ זרם SSE: שולח סטייט עדכני כל שנייה ללא פולינג בצד לקוח. """
+    @stream_with_context
+    def event_stream():
+        while True:
+            recompute_chain()
+            data = serialize_state()
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            time.sleep(1)
+    headers = {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"  # ל-Nginx (אם קיים) כדי לא לBuffer
+    }
+    return Response(event_stream(), headers=headers)
 
 
 @app.route("/add", methods=["POST"])
@@ -94,32 +139,20 @@ def add_task():
         "end_time": None,
         "status": "pending"
     }
-    tasks.append(task)
+    tasks.append(task)  # חדשה תמיד למטה
     return jsonify({"ok": True, "task": task})
-
-
-def any_running():
-    return any(t["status"] == "running" for t in tasks)
-
-def any_active():
-    return any(t["status"] in ("running", "paused") for t in tasks)
 
 
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
     """
     התחלה:
-    - מותר להתחיל Pending רק אם אין משימה רצה.
-    - מותר להמשיך Paused רק אם אין משימה רצה.
-    - מותר להפעיל שוב Done רק אם אין משימות פעילות בכלל (לא running ולא paused).
+    - Pending/Paused: מותר רק אם אין משימה רצה.
+    - Done: מותר רק אם אין משימות פעילות בכלל (לא running ולא paused).
     """
     for t in tasks:
         if t["id"] == task_id:
-            if t["status"] == "pending" and not any_running():
-                t["start_time"] = now()
-                t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
-                t["status"] = "running"
-            elif t["status"] == "paused" and not any_running():
+            if t["status"] in ("pending", "paused") and not any_running():
                 t["start_time"] = now()
                 t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
                 t["status"] = "running"
@@ -165,9 +198,7 @@ def delete_task(task_id):
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
-    """
-    עריכת שם/זמן מותרת כשהמשימה לא רצה.
-    """
+    """ עריכת שם/זמן (מותר כשלא רצה). """
     data = request.json or {}
     for t in tasks:
         if t["id"] == task_id and t["status"] in ("pending", "paused", "done"):
@@ -187,7 +218,7 @@ def update_task(task_id):
                 t["start_time"] = None
                 t["end_time"] = None
             break
-    return jsonify({"ok": True, "task": t})
+    return jsonify({"ok": True})
 
 
 @app.route("/extend/<int:task_id>", methods=["POST"])
@@ -211,13 +242,13 @@ def extend_task(task_id):
                 t["remaining"] += extra
             break
 
-    return jsonify({"ok": True, "task": t})
+    return jsonify({"ok": True})
 
 
 @app.route("/skip/<int:task_id>", methods=["POST"])
 def skip_task(task_id):
     """
-    דלג: מסמן המשימה הנוכחית כ- done ומפעיל אוטומטית את הבאה בתור (אם קיימת).
+    דלג: מסמן המשימה הנוכחית כ-done ומפעיל אוטומטית את הבאה (אם קיימת).
     """
     for idx, t in enumerate(tasks):
         if t["id"] == task_id and t["status"] == "running":
@@ -238,9 +269,9 @@ def skip_task(task_id):
 @app.route("/set_pending/<int:task_id>", methods=["POST"])
 def set_pending(task_id):
     """
-    הפיכת משימה ל-Pending (רק אם לא רצה):
+    הפוך ל-Pending (כשלא רצה):
     - מ- done: remaining = duration
-    - מ- paused: שומר remaining כפי שהוא
+    - מ- paused: שומר remaining
     """
     for t in tasks:
         if t["id"] == task_id and t["status"] in ("paused", "done", "pending"):
@@ -254,32 +285,12 @@ def set_pending(task_id):
 
 
 @app.route("/state")
-def state():
+def state_debug():
+    """ אופציונלי: נקודת בדיקה ידנית אם תרצה. לא בשימוש ב-UI. """
     recompute_chain()
-    end_all = overall_end_time()
-    end_all_str = end_all.strftime("%H:%M:%S %d.%m.%Y") if end_all else "-"
-
-    payload = []
-    for t in tasks:
-        payload.append({
-            "id": t["id"],
-            "name": t["name"],
-            "status": t["status"],
-            "duration": t["duration"],
-            "remaining": max(0, int(t["remaining"])) if t["remaining"] is not None else 0,
-            "remaining_hhmmss": hhmmss(t["remaining"]),
-            "start_time": to_iso(t["start_time"]),
-            "end_time": to_iso(t["end_time"]),
-            "end_time_str": t["end_time"].astimezone(tz).strftime("%H:%M:%S") if t["end_time"] else "-"
-        })
-
-    return jsonify({
-        "ok": True,
-        "tasks": payload,
-        "overall_end_time": end_all_str,
-        "now": now().strftime("%H:%M:%S %d.%m.%Y")
-    })
+    return jsonify(serialize_state())
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    # להרצה עם gunicorn בפרודקשן, כפי שיש לך ב-Procfile
+    app.run(host="0.0.0.0", port=5000, threaded=True)
