@@ -91,16 +91,13 @@ def add_task():
 
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
-    # בדיקה אם יש משימה פעילה אחרת
     active_exists = any(t["status"] in ("running", "paused") for t in tasks)
     for t in tasks:
         if t["id"] == task_id:
-            # מותר להתחיל משימה אם היא pending או paused
             if t["status"] in ("pending", "paused"):
                 t["start_time"] = now()
                 t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
                 t["status"] = "running"
-            # אם היא done ומותר להתחיל שוב (רק אם אין פעילה אחרת)
             elif t["status"] == "done" and not active_exists:
                 t["remaining"] = t["duration"]
                 t["start_time"] = now()
