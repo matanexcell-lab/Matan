@@ -17,6 +17,7 @@
     .pending { background:#f2f2f2; }
     .done { background:#e6e6e6; text-decoration: line-through; color:#666; }
     .actions button { margin: 2px; }
+    .extend-box { display:flex; gap:4px; justify-content:center; align-items:center; margin-top:4px; }
   </style>
 </head>
 <body>
@@ -82,6 +83,18 @@ async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
 
 async function extendTask(id, seconds){
   await api(`/extend/${id}`, "POST", { seconds });
+}
+
+function extendCustom(id){
+  const input = document.getElementById(`extend-input-${id}`);
+  const unit = document.getElementById(`extend-unit-${id}`);
+  let val = parseInt(input.value || "0",10);
+  if(val > 0){
+    let seconds = val;
+    if(unit.value === "minutes") seconds = val * 60;
+    extendTask(id, seconds);
+    input.value = "";
+  }
 }
 
 function editTask(id){
@@ -150,4 +163,46 @@ async function render() {
           <button onclick="cancelEdit()">בטל</button>
         </td>
         <td class="actions">
-          <button onclick="startTask(${t.id})
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+        </td>
+      `;
+    } else {
+      tr.innerHTML = `
+        <td>${t.name}</td>
+        <td class="muted">${fmtHHMMSS(t.duration)}</td>
+        <td><strong>${t.remaining_hhmmss}</strong></td>
+        <td>${t.end_time_str || "-"}</td>
+        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
+        <td>
+          ${(t.status !== "running") ? `<button onclick="editTask(${t.id})">ערוך</button>` : `<span class="muted">נמנע</span>`}
+        </td>
+        <td class="actions">
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+          <div class="extend-box">
+            <input id="extend-input-${t.id}" type="number" min="1" placeholder="מספר">
+            <select id="extend-unit-${t.id}">
+              <option value="minutes">דקות</option>
+              <option value="seconds">שניות</option>
+            </select>
+            <button onclick="extendCustom(${t.id})">הארך</button>
+          </div>
+        </td>
+      `;
+    }
+
+    tb.appendChild(tr);
+  });
+}
+
+setInterval(() => { if(editingId===null) render(); }, 1000);
+render();
+document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
+</script>
+</body>
+</html>
