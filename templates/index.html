@@ -49,6 +49,7 @@
     <th>שעת סיום</th>
     <th>סטטוס</th>
     <th>עריכה</th>
+    <th>הארכה</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -82,9 +83,28 @@ async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
 async function skipTask(id){ await api(`/skip/${id}`,"POST"); }
 
-async function extendTask(id, seconds){
-  await api(`/extend/${id}`, "POST", { seconds });
+async function saveEdit(id){
+  const row = document.getElementById(`row-${id}`);
+  const name = row.querySelector(".edit-name").value.trim();
+  const hours = parseInt(row.querySelector(".edit-h").value||"0",10);
+  const minutes = parseInt(row.querySelector(".edit-m").value||"0",10);
+  const seconds = parseInt(row.querySelector(".edit-s").value||"0",10);
+  await api(`/update/${id}`, "POST", {name,hours,minutes,seconds});
+  editingId=null; render();
 }
+function cancelEdit(){ editingId=null; render(); }
+
+async function saveExtend(id){
+  const row = document.getElementById(`row-${id}`);
+  const minutes = parseInt(row.querySelector(".ext-m").value||"0",10);
+  const seconds = parseInt(row.querySelector(".ext-s").value||"0",10);
+  const total = minutes*60+seconds;
+  if(total>0){
+    await api(`/extend/${id}`, "POST", {seconds:total});
+  }
+  extendingId=null; render();
+}
+function cancelExtend(){ extendingId=null; render(); }
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -102,6 +122,8 @@ function statusClass(st){
 }
 
 async function render() {
+  if(editingId||extendingId){ return; } // אל תרענן בזמן עריכה/הארכה
+
   const data = await api("/state");
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
@@ -113,23 +135,56 @@ async function render() {
     tr.id = `row-${t.id}`;
     tr.className = t.status;
 
-    tr.innerHTML = `
-      <td>${t.name}</td>
-      <td class="muted">${fmtHHMMSS(t.duration)}</td>
-      <td><strong>${t.remaining_hhmmss}</strong></td>
-      <td>${t.end_time_str || "-"}</td>
-      <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-      <td>
-        ${(t.status !== "running") ? `<button onclick="editTask(${t.id})">ערוך</button>` : `<span class="muted">נמנע</span>`}
-      </td>
-      <td class="actions">
-        <button onclick="startTask(${t.id})">התחל</button>
-        <button onclick="pauseTask(${t.id})">השהה</button>
-        <button onclick="resetTask(${t.id})">איפוס</button>
-        <button onclick="deleteTask(${t.id})">מחק</button>
-        ${t.status === "running" ? `<button onclick="skipTask(${t.id})">דלג למשימה הבאה</button>` : ""}
-      </td>
-    `;
+    if(editingId===t.id){
+      tr.innerHTML=`
+        <td><input class="edit-name" value="${t.name}"></td>
+        <td colspan="2">
+          <input type="number" class="edit-h" value="0" min="0"> :
+          <input type="number" class="edit-m" value="0" min="0"> :
+          <input type="number" class="edit-s" value="0" min="0">
+        </td>
+        <td colspan="2"></td>
+        <td colspan="3">
+          <button onclick="saveEdit(${t.id})">שמור</button>
+          <button onclick="cancelEdit()">בטל</button>
+        </td>`;
+    }
+    else if(extendingId===t.id){
+      tr.innerHTML=`
+        <td>${t.name}</td>
+        <td colspan="2">
+          הוסף: 
+          <input type="number" class="ext-m" value="0" min="0"> דק'
+          <input type="number" class="ext-s" value="0" min="0"> שנ'
+        </td>
+        <td colspan="2"></td>
+        <td colspan="3">
+          <button onclick="saveExtend(${t.id})">בצע הארכה</button>
+          <button onclick="cancelExtend()">בטל</button>
+        </td>`;
+    }
+    else {
+      tr.innerHTML = `
+        <td>${t.name}</td>
+        <td class="muted">${fmtHHMMSS(t.duration)}</td>
+        <td><strong>${t.remaining_hhmmss}</strong></td>
+        <td>${t.end_time_str || "-"}</td>
+        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
+        <td>
+          ${(t.status!=="running") ? `<button onclick="editingId=${t.id};render();">ערוך</button>` : `<span class="muted">נמנע</span>`}
+        </td>
+        <td>
+          <button onclick="extendingId=${t.id};render();">הארך</button>
+        </td>
+        <td class="actions">
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+          ${t.status==="running"? `<button onclick="skipTask(${t.id})">דלג למשימה הבאה</button>` : ""}
+        </td>
+      `;
+    }
     tb.appendChild(tr);
   });
 }
