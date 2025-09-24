@@ -48,7 +48,7 @@
     <th>זמן נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה (כשלא פעילה)</th>
+    <th>עריכה</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -57,6 +57,7 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
+let editingId = null;  // מזהה אם יש שורה בעריכה
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -87,6 +88,11 @@ async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
 async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
 
+function editTask(id){
+  editingId = id;
+  render(); // מרנדר מחדש את הטבלה עם שורה בעריכה
+}
+
 async function saveEdit(id){
   const row = document.getElementById(`row-${id}`);
   const nm = row.querySelector(".edit-name").value;
@@ -96,9 +102,14 @@ async function saveEdit(id){
 
   const res = await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
   if(res.ok){
-    // לרנדר מחדש כדי לראות עדכון מיידי
+    editingId = null;
     await render();
   }
+}
+
+function cancelEdit(){
+  editingId = null;
+  render();
 }
 
 function statusClass(st){
@@ -120,38 +131,53 @@ async function render() {
     tr.id = `row-${t.id}`;
     tr.className = t.status;
 
-    // ניתן לערוך רק כשהמשימה לא running
-    const canEdit = (t.status !== "running");
+    // מצב עריכה?
+    if(editingId === t.id){
+      tr.innerHTML = `
+        <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}"></td>
+        <td class="muted">${fmtHHMMSS(t.duration)}</td>
+        <td><strong>${t.remaining_hhmmss}</strong></td>
+        <td>${t.end_time_str || "-"}</td>
+        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
+        <td>
+          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}"></label>
+          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}"></label>
+          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}"></label>
+          <button onclick="saveEdit(${t.id})">שמור</button>
+          <button onclick="cancelEdit()">בטל</button>
+        </td>
+        <td class="actions">
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+        </td>
+      `;
+    } else {
+      tr.innerHTML = `
+        <td>${t.name}</td>
+        <td class="muted">${fmtHHMMSS(t.duration)}</td>
+        <td><strong>${t.remaining_hhmmss}</strong></td>
+        <td>${t.end_time_str || "-"}</td>
+        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
+        <td>
+          ${(t.status !== "running") ? `<button onclick="editTask(${t.id})">ערוך</button>` : `<span class="muted">נמנע</span>`}
+        </td>
+        <td class="actions">
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+        </td>
+      `;
+    }
 
-    tr.innerHTML = `
-      <td>
-        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
-      </td>
-      <td class="muted">${fmtHHMMSS(t.duration)}</td>
-      <td><strong>${t.remaining_hhmmss}</strong></td>
-      <td>${t.end_time_str || "-"}</td>
-      <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-      <td>
-        <div style="display:flex;gap:6px;justify-content:center;align-items:center">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
-          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
-        </div>
-      </td>
-      <td class="actions">
-        <button onclick="startTask(${t.id})">התחל</button>
-        <button onclick="pauseTask(${t.id})">השהה</button>
-        <button onclick="resetTask(${t.id})">איפוס</button>
-        <button onclick="deleteTask(${t.id})">מחק</button>
-      </td>
-    `;
     tb.appendChild(tr);
   });
 }
 
 // פולינג כל שנייה + כפתור הוספה
-setInterval(render, 1000);
+setInterval(() => { if(editingId===null) render(); }, 1000);
 render();
 document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
 </script>
