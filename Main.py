@@ -91,11 +91,21 @@ def add_task():
 
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
+    # בדיקה אם יש משימה פעילה אחרת
+    active_exists = any(t["status"] in ("running", "paused") for t in tasks)
     for t in tasks:
-        if t["id"] == task_id and t["status"] in ("pending", "paused"):
-            t["start_time"] = now()
-            t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
-            t["status"] = "running"
+        if t["id"] == task_id:
+            # מותר להתחיל משימה אם היא pending או paused
+            if t["status"] in ("pending", "paused"):
+                t["start_time"] = now()
+                t["end_time"] = t["start_time"] + timedelta(seconds=max(0, int(t["remaining"])))
+                t["status"] = "running"
+            # אם היא done ומותר להתחיל שוב (רק אם אין פעילה אחרת)
+            elif t["status"] == "done" and not active_exists:
+                t["remaining"] = t["duration"]
+                t["start_time"] = now()
+                t["end_time"] = t["start_time"] + timedelta(seconds=t["duration"])
+                t["status"] = "running"
             break
     return jsonify({"ok": True})
 
@@ -179,12 +189,10 @@ def extend_task(task_id):
 def skip_task(task_id):
     for idx, t in enumerate(tasks):
         if t["id"] == task_id and t["status"] == "running":
-            # סימון המשימה כגמורה
             t["remaining"] = 0
             t["status"] = "done"
             t["start_time"] = None
             t["end_time"] = None
-            # הפעלת הבאה בתור
             if idx + 1 < len(tasks):
                 nxt = tasks[idx + 1]
                 if nxt["status"] == "pending":
