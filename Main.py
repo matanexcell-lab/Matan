@@ -31,6 +31,9 @@ def init_db():
     conn.commit()
     conn.close()
 
+# >>> חשוב: נריץ יצירת טבלה גם כשעולים עם gunicorn (ברנדר)
+init_db()
+
 def row2dict(r): return dict(r)
 
 # ===== Time helpers =====
@@ -105,8 +108,8 @@ def any_active():
 # ===== Chain logic =====
 def recompute_chain_in_db():
     """
-    מעדכן remaining לרצות, מסיים כשעבר end_time,
-    ומדליק אוטומטית את המשימה הבאה (pending) לפי הסדר.
+    מעדכן remaining למשימות רצות, מסיים כשעבר end_time,
+    ומפעיל אוטומטית את המשימה הבאה (pending).
     """
     tasks = fetch_all()
     now_ts = now()
@@ -133,7 +136,6 @@ def recompute_chain_in_db():
                         nxt["status"] = "running"
                         save_task(nxt)
             else:
-                # עדכון remaining "חי"
                 if rem != t["remaining"]:
                     t["remaining"] = rem
                     save_task(t)
@@ -142,7 +144,7 @@ def overall_end_time_calc():
     tasks = fetch_all()
     if not tasks: return None
     base = now()
-    # קח את סוף הרצה הנוכחית (אם יש)
+    # סוף משימה רצה, אם יש
     for t in tasks:
         if t["status"] == "running" and t["end_time"]:
             et = from_iso(t["end_time"])
@@ -307,7 +309,7 @@ def set_pending(task_id):
 
 @app.route("/state")
 def state():
-    # עדכן ריצות/רצף ותחזיר מצב מלא
+    # מעדכן ריצות/רצף ומחזיר מצב מלא
     recompute_chain_in_db()
     tasks = fetch_all()
     payload = []
@@ -338,5 +340,5 @@ def state():
     })
 
 if __name__ == "__main__":
-    init_db()
+    # להרצה מקומית
     app.run(host="0.0.0.0", port=5000)
