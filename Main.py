@@ -175,6 +175,26 @@ def extend_task(task_id):
     return jsonify({"ok": True, "task": t})
 
 
+@app.route("/skip/<int:task_id>", methods=["POST"])
+def skip_task(task_id):
+    for idx, t in enumerate(tasks):
+        if t["id"] == task_id and t["status"] == "running":
+            # סימון המשימה כגמורה
+            t["remaining"] = 0
+            t["status"] = "done"
+            t["start_time"] = None
+            t["end_time"] = None
+            # הפעלת הבאה בתור
+            if idx + 1 < len(tasks):
+                nxt = tasks[idx + 1]
+                if nxt["status"] == "pending":
+                    nxt["start_time"] = now()
+                    nxt["end_time"] = nxt["start_time"] + timedelta(seconds=nxt["remaining"])
+                    nxt["status"] = "running"
+            break
+    return jsonify({"ok": True})
+
+
 @app.route("/state")
 def state():
     recompute_chain()
