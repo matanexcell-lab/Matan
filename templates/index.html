@@ -17,7 +17,6 @@
     .pending { background:#f2f2f2; }
     .done { background:#e6e6e6; text-decoration: line-through; color:#666; }
     .actions button { margin: 2px; }
-    .extend-box { display:flex; gap:4px; justify-content:center; align-items:center; margin-top:4px; }
   </style>
 </head>
 <body>
@@ -59,7 +58,7 @@
 <script>
 const $ = (sel) => document.querySelector(sel);
 let editingId = null;
-let extendingId = null;  // מזהה של משימה שנמצאת במצב הארכה
+let extendingId = null;
 
 async function api(url, method="GET", body=null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
@@ -81,56 +80,10 @@ async function startTask(id){ await api(`/start/${id}`,"POST"); }
 async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
 async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
+async function skipTask(id){ await api(`/skip/${id}`,"POST"); }
 
 async function extendTask(id, seconds){
   await api(`/extend/${id}`, "POST", { seconds });
-}
-
-function openExtend(id){
-  extendingId = id;
-  render();
-}
-
-function cancelExtend(){
-  extendingId = null;
-  render();
-}
-
-function doExtend(id){
-  const input = document.getElementById(`extend-input-${id}`);
-  const unit = document.getElementById(`extend-unit-${id}`);
-  let val = parseInt(input.value || "0",10);
-  if(val > 0){
-    let seconds = val;
-    if(unit.value === "minutes") seconds = val * 60;
-    extendTask(id, seconds);
-  }
-  extendingId = null;
-  render();
-}
-
-function editTask(id){
-  editingId = id;
-  render();
-}
-
-async function saveEdit(id){
-  const row = document.getElementById(`row-${id}`);
-  const nm = row.querySelector(".edit-name").value;
-  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
-  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
-  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-
-  const res = await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
-  if(res.ok){
-    editingId = null;
-    await render();
-  }
-}
-
-function cancelEdit(){
-  editingId = null;
-  render();
 }
 
 function fmtHHMMSS(totalSeconds) {
@@ -160,78 +113,28 @@ async function render() {
     tr.id = `row-${t.id}`;
     tr.className = t.status;
 
-    // === מצב עריכה ===
-    if(editingId === t.id){
-      tr.innerHTML = `
-        <td><input class="edit-name" type="text" value="${t.name}"></td>
-        <td class="muted">${fmtHHMMSS(t.duration)}</td>
-        <td><strong>${t.remaining_hhmmss}</strong></td>
-        <td>${t.end_time_str || "-"}</td>
-        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-        <td>
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}"></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}"></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}"></label>
-          <button onclick="saveEdit(${t.id})">שמור</button>
-          <button onclick="cancelEdit()">בטל</button>
-        </td>
-        <td class="actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
-        </td>
-      `;
-    }
-
-    // === מצב הארכה ===
-    else if(extendingId === t.id){
-      tr.innerHTML = `
-        <td>${t.name}</td>
-        <td class="muted">${fmtHHMMSS(t.duration)}</td>
-        <td><strong>${t.remaining_hhmmss}</strong></td>
-        <td>${t.end_time_str || "-"}</td>
-        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-        <td><span class="muted">—</span></td>
-        <td class="actions">
-          <input id="extend-input-${t.id}" type="number" min="1" placeholder="מספר">
-          <select id="extend-unit-${t.id}">
-            <option value="minutes">דקות</option>
-            <option value="seconds">שניות</option>
-          </select>
-          <button onclick="doExtend(${t.id})">בצע הארכה</button>
-          <button onclick="cancelExtend()">בטל</button>
-        </td>
-      `;
-    }
-
-    // === תצוגה רגילה ===
-    else {
-      tr.innerHTML = `
-        <td>${t.name}</td>
-        <td class="muted">${fmtHHMMSS(t.duration)}</td>
-        <td><strong>${t.remaining_hhmmss}</strong></td>
-        <td>${t.end_time_str || "-"}</td>
-        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-        <td>
-          ${(t.status !== "running") ? `<button onclick="editTask(${t.id})">ערוך</button>` : `<span class="muted">נמנע</span>`}
-        </td>
-        <td class="actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
-          <button onclick="openExtend(${t.id})">הארך</button>
-        </td>
-      `;
-    }
-
+    tr.innerHTML = `
+      <td>${t.name}</td>
+      <td class="muted">${fmtHHMMSS(t.duration)}</td>
+      <td><strong>${t.remaining_hhmmss}</strong></td>
+      <td>${t.end_time_str || "-"}</td>
+      <td><span class="${statusClass(t.status)}">${t.status}</span></td>
+      <td>
+        ${(t.status !== "running") ? `<button onclick="editTask(${t.id})">ערוך</button>` : `<span class="muted">נמנע</span>`}
+      </td>
+      <td class="actions">
+        <button onclick="startTask(${t.id})">התחל</button>
+        <button onclick="pauseTask(${t.id})">השהה</button>
+        <button onclick="resetTask(${t.id})">איפוס</button>
+        <button onclick="deleteTask(${t.id})">מחק</button>
+        ${t.status === "running" ? `<button onclick="skipTask(${t.id})">דלג למשימה הבאה</button>` : ""}
+      </td>
+    `;
     tb.appendChild(tr);
   });
 }
 
-// רענון רק אם לא בעריכה ולא בהארכה
-setInterval(() => { if(editingId===null && extendingId===null) render(); }, 1000);
+setInterval(render, 1000);
 render();
 document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
 </script>
