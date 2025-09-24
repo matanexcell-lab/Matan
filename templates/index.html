@@ -93,7 +93,12 @@ async function saveEdit(id){
   const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
   const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
   const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+
+  const res = await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+  if(res.ok){
+    // לרנדר מחדש כדי לראות עדכון מיידי
+    await render();
+  }
 }
 
 function statusClass(st){
