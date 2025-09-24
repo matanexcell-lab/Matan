@@ -4,8 +4,7 @@ import pytz
 
 app = Flask(__name__)
 
-# זיכרון זמני (נמחק כשמאפסים את השרת)
-tasks = []  # כל משימה = dict
+tasks = []
 tz = pytz.timezone("Asia/Jerusalem")
 
 
@@ -28,17 +27,14 @@ def hhmmss(total_seconds: float) -> str:
 
 
 def recompute_chain():
-    """מעדכן זמנים ומפעיל משימה הבאה אוטומטית"""
     for idx, t in enumerate(tasks):
         if t["status"] == "running":
             remaining = (t["end_time"] - now()).total_seconds()
             if remaining <= 0:
-                # סיום משימה
                 t["remaining"] = 0
                 t["status"] = "done"
                 t["start_time"] = None
                 t["end_time"] = None
-                # הפעלה של הבאה בתור
                 if idx + 1 < len(tasks):
                     nxt = tasks[idx + 1]
                     if nxt["status"] == "pending":
@@ -50,7 +46,6 @@ def recompute_chain():
 
 
 def overall_end_time():
-    """חישוב שעת סיום כוללת לכל המשימות"""
     if not tasks:
         return None
 
@@ -79,8 +74,7 @@ def add_task():
     hours = int(data.get("hours") or 0)
     minutes = int(data.get("minutes") or 0)
     seconds = int(data.get("seconds") or 0)
-    total = hours * 3600 + minutes * 60 + seconds
-    total = max(0, total)
+    total = max(0, hours * 3600 + minutes * 60 + seconds)
 
     task = {
         "id": (tasks[-1]["id"] + 1) if tasks else 1,
@@ -139,7 +133,6 @@ def delete_task(task_id):
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
-    """עדכון שם/זמן — מותר כשלא רצה"""
     data = request.json or {}
     for t in tasks:
         if t["id"] == task_id and t["status"] in ("pending", "paused", "done"):
@@ -159,6 +152,26 @@ def update_task(task_id):
                 t["start_time"] = None
                 t["end_time"] = None
             break
+    return jsonify({"ok": True, "task": t})
+
+
+@app.route("/extend/<int:task_id>", methods=["POST"])
+def extend_task(task_id):
+    data = request.json or {}
+    extra = int(data.get("seconds") or 0)
+    if extra <= 0:
+        return jsonify({"ok": False, "error": "seconds must be > 0"}), 400
+
+    for t in tasks:
+        if t["id"] == task_id:
+            t["duration"] += extra
+            if t["status"] == "running":
+                t["remaining"] = max(0, (t["end_time"] - now()).total_seconds()) + extra
+                t["end_time"] = t["end_time"] + timedelta(seconds=extra)
+            else:
+                t["remaining"] += extra
+            break
+
     return jsonify({"ok": True, "task": t})
 
 
