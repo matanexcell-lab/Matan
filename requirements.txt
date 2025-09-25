@@ -1,5 +1,4 @@
-flask==3.0.3
-pytz==2025.1
-SQLAlchemy==2.0.35
-psycopg2-binary==2.9.9
-gunicorn==23.0.0
+Flask
+gunicorn
+sqlalchemy
+psycopg2-binary
