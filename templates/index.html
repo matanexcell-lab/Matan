@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
-<title>מנהל משימות - גרירה + כל הפיצ’רים</title>
+<title>מנהל משימות - גרסה מלאה</title>
 <style>
 body { font-family: Arial, sans-serif; direction: rtl; padding: 10px; }
 h2 { text-align:center; }
@@ -18,24 +18,23 @@ button { margin: 2px; }
 </style>
 </head>
 <body>
-<h2>🕒 מנהל משימות</h2>
+<h2>🕒 מנהל משימות - עם גרירה</h2>
 
 <div>
   <strong id="overall"></strong>
 </div>
 
-<!-- הוספת משימה -->
 <div>
   <input id="newName" placeholder="שם משימה">
   <input id="newH" type="number" min="0" placeholder="שעות" style="width:60px">
   <input id="newM" type="number" min="0" placeholder="דקות" style="width:60px">
   <input id="newS" type="number" min="0" placeholder="שניות" style="width:60px">
-  <button onclick="addTask()">➕ הוסף משימה</button>
+  <button id="btnAdd">➕ הוסף משימה</button>
 </div>
 
 <table>
 <thead>
-<tr><th>שם</th><th>זמן כולל</th><th>נותר</th><th>סטטוס</th><th>פעולות</th><th>⬆⬇</th></tr>
+<tr><th>שם</th><th>משך</th><th>נותר</th><th>סטטוס</th><th>פעולות</th></tr>
 </thead>
 <tbody id="tbody"></tbody>
 </table>
@@ -44,8 +43,8 @@ button { margin: 2px; }
 async function api(url, method="GET", body=null) {
   const opt={method,headers:{'Content-Type':'application/json'}};
   if(body) opt.body=JSON.stringify(body);
-  const r=await fetch(url,opt);
-  return r.json();
+  const res=await fetch(url,opt);
+  return res.json();
 }
 
 async function render(){
@@ -54,10 +53,10 @@ async function render(){
     `שעת סיום כוללת: ${data.overall_end_time} | עכשיו: ${data.now}`;
   const tb=document.getElementById("tbody");
   tb.innerHTML="";
-  data.tasks.forEach((t,i)=>{
+  data.tasks.forEach(t=>{
     const tr=document.createElement("tr");
-    tr.dataset.id=t.id;
     tr.draggable=true;
+    tr.dataset.id=t.id;
     tr.className=t.status;
     tr.innerHTML=`
       <td>${t.name}</td>
@@ -65,14 +64,10 @@ async function render(){
       <td>${t.remaining_hhmmss}</td>
       <td><span class="badge ${t.status}">${t.status}</span></td>
       <td>
-        <button onclick="start(${t.id})">התחל</button>
-        <button onclick="pause(${t.id})">השהה</button>
-        <button onclick="del(${t.id})">מחק</button>
+        <button onclick="start(${t.id})">▶️</button>
+        <button onclick="pause(${t.id})">⏸️</button>
         <button onclick="extend(${t.id})">+10 דקות</button>
-      </td>
-      <td>
-        <button onclick="move(${t.id},'up')">⬆</button>
-        <button onclick="move(${t.id},'down')">⬇</button>
+        <button onclick="del(${t.id})">🗑️</button>
       </td>`;
     tb.appendChild(tr);
   });
@@ -81,10 +76,15 @@ async function render(){
 
 async function addTask(){
   const name=document.getElementById("newName").value;
-  const h=document.getElementById("newH").value;
-  const m=document.getElementById("newM").value;
-  const s=document.getElementById("newS").value;
+  const h=parseInt(document.getElementById("newH").value||0);
+  const m=parseInt(document.getElementById("newM").value||0);
+  const s=parseInt(document.getElementById("newS").value||0);
   await api("/add","POST",{name,hours:h,minutes:m,seconds:s});
+  document.getElementById("newName").value="";
+  document.getElementById("newH").value="";
+  document.getElementById("newM").value="";
+  document.getElementById("newS").value="";
+  await render();
 }
 
 async function start(id){await api("/start/"+id,"POST");}
@@ -93,9 +93,10 @@ async function del(id){await api("/delete/"+id,"POST");}
 async function extend(id){await api("/extend/"+id,"POST",{minutes:10});}
 
 setInterval(render,1000);
+document.getElementById("btnAdd").addEventListener("click", addTask);
 render();
 
-// --- גרירה ---
+// --- גרירה לשינוי סדר ---
 let dragSrc=null;
 function enableDrag(){
   const rows=document.querySelectorAll("#tbody tr");
@@ -126,18 +127,6 @@ function enableDrag(){
 async function saveOrder(){
   const ids=Array.from(document.querySelectorAll("#tbody tr")).map(tr=>parseInt(tr.dataset.id));
   await api("/reorder","POST",{order:ids});
-}
-
-// --- חיצים לשינוי ידני ---
-async function move(id,dir){
-  const rows=Array.from(document.querySelectorAll("#tbody tr"));
-  const idx=rows.findIndex(r=>parseInt(r.dataset.id)===id);
-  if(dir==="up" && idx>0){
-    rows[idx].parentNode.insertBefore(rows[idx],rows[idx-1]);
-  }else if(dir==="down" && idx<rows.length-1){
-    rows[idx].parentNode.insertBefore(rows[idx+1],rows[idx]);
-  }
-  await saveOrder();
 }
 </script>
 </body>
