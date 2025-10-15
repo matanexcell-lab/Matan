@@ -6,7 +6,7 @@ from flask import Flask, jsonify, render_template, request
 from sqlalchemy import Column, DateTime, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# === הגדרות בסיס ===
+# === הגדרות בסיסיות ===
 TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
@@ -29,17 +29,16 @@ def session_scope():
     finally:
         s.close()
 
-
-# === טבלת משימות ===
+# === טבלת המשימות ===
 class Task(Base):
     __tablename__ = "tasks"
     id        = Column(Integer, primary_key=True, autoincrement=True)
     name      = Column(String, nullable=False)
-    duration  = Column(Integer, nullable=False)   # בשניות
+    duration  = Column(Integer, nullable=False)
     remaining = Column(Integer, nullable=False)
-    status    = Column(String, nullable=False)    # pending | running | paused | done
+    status    = Column(String, nullable=False)  # pending | running | paused | done
     end_time  = Column(DateTime(timezone=True))
-    position  = Column(Integer, nullable=False, default=0)  # סדר תצוגה
+    position  = Column(Integer, nullable=False, default=0)
 
     def to_dict(self):
         rem = self.remaining
@@ -59,17 +58,16 @@ class Task(Base):
 
 Base.metadata.create_all(engine)
 
-# === פונקציות עזר ===
+# === עזרי זמן ===
 def now():
     return datetime.now(TZ)
 
-def hhmmss(seconds):
-    seconds = max(0, int(seconds))
-    h = seconds // 3600
-    m = (seconds % 3600) // 60
-    s = seconds % 60
+def hhmmss(sec):
+    sec = max(0, int(sec))
+    h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+# === לוגיקה ===
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -103,9 +101,8 @@ def calc_overall_end():
             if t.status == "running" and t.end_time:
                 base = t.end_time
             elif t.status in ("paused", "pending"):
-                base = base + timedelta(seconds=t.remaining)
+                base += timedelta(seconds=t.remaining)
         return base
-
 
 # === Flask ===
 app = Flask(__name__)
@@ -119,19 +116,19 @@ def state():
     recompute_chain()
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
-        all_end = calc_overall_end()
+        overall = calc_overall_end()
         return jsonify({
             "tasks": [t.to_dict() for t in tasks],
-            "overall_end_time": all_end.astimezone(TZ).strftime("%H:%M:%S %d.%m.%Y") if all_end else "-",
+            "overall_end_time": overall.astimezone(TZ).strftime("%H:%M:%S %d.%m.%Y") if overall else "-",
             "now": now().strftime("%H:%M:%S %d.%m.%Y")
         })
 
 @app.route("/add", methods=["POST"])
 def add():
-    data = request.json
-    name = data.get("name", "משימה חדשה")
-    duration = int(data.get("hours", 0))*3600 + int(data.get("minutes", 0))*60 + int(data.get("seconds", 0))
-    duration = max(1, duration)
+    d = request.json
+    name = d.get("name", "משימה חדשה")
+    duration = int(d.get("hours", 0))*3600 + int(d.get("minutes", 0))*60 + int(d.get("seconds", 0))
+    duration = max(duration, 1)
     with session_scope() as s:
         max_pos = s.query(Task.position).order_by(Task.position.desc()).first()
         new_pos = (max_pos[0] + 1) if max_pos else 1
@@ -141,12 +138,11 @@ def add():
 
 @app.route("/reorder", methods=["POST"])
 def reorder():
-    """מקבל רשימת מזהים לפי הסדר החדש ושומר"""
-    data = request.json or {}
+    data = request.json
     order = data.get("order", [])
     with session_scope() as s:
-        for idx, task_id in enumerate(order, start=1):
-            t = s.get(Task, task_id)
+        for idx, tid in enumerate(order, start=1):
+            t = s.get(Task, tid)
             if t:
                 t.position = idx
                 s.add(t)
@@ -177,21 +173,17 @@ def pause(id):
 def delete(id):
     with session_scope() as s:
         t = s.get(Task, id)
-        if t:
-            s.delete(t)
+        if t: s.delete(t)
     return jsonify({"ok": True})
 
 @app.route("/update/<int:id>", methods=["POST"])
 def update(id):
-    data = request.json
+    d = request.json
     with session_scope() as s:
         t = s.get(Task, id)
-        if not t:
-            return jsonify({"ok": False, "error": "not found"}), 404
-        t.name = data.get("name", t.name)
-        h = int(data.get("hours", 0))
-        m = int(data.get("minutes", 0))
-        sec = int(data.get("seconds", 0))
+        if not t: return jsonify({"ok": False, "error": "not found"}), 404
+        t.name = d.get("name", t.name)
+        h, m, sec = int(d.get("hours", 0)), int(d.get("minutes", 0)), int(d.get("seconds", 0))
         dur = h*3600 + m*60 + sec
         if dur > 0:
             t.duration = dur
@@ -201,8 +193,8 @@ def update(id):
 
 @app.route("/extend/<int:id>", methods=["POST"])
 def extend(id):
-    data = request.json
-    extra = int(data.get("hours", 0))*3600 + int(data.get("minutes", 0))*60 + int(data.get("seconds", 0))
+    d = request.json
+    extra = int(d.get("hours", 0))*3600 + int(d.get("minutes", 0))*60 + int(d.get("seconds", 0))
     with session_scope() as s:
         t = s.get(Task, id)
         if t:
