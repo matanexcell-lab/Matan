@@ -6,7 +6,7 @@ from flask import Flask, jsonify, render_template, request
 from sqlalchemy import Column, DateTime, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# === הגדרות בסיסיות ===
+# === הגדרות ===
 TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
@@ -29,7 +29,7 @@ def session_scope():
     finally:
         s.close()
 
-# === טבלת המשימות ===
+# === טבלת משימות ===
 class Task(Base):
     __tablename__ = "tasks"
     id        = Column(Integer, primary_key=True, autoincrement=True)
@@ -58,7 +58,7 @@ class Task(Base):
 
 Base.metadata.create_all(engine)
 
-# === עזרי זמן ===
+# === פונקציות זמן ===
 def now():
     return datetime.now(TZ)
 
@@ -67,7 +67,7 @@ def hhmmss(sec):
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# === לוגיקה ===
+# === לוגיקת שרשרת ===
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -125,16 +125,20 @@ def state():
 
 @app.route("/add", methods=["POST"])
 def add():
-    d = request.json
-    name = d.get("name", "משימה חדשה")
-    duration = int(d.get("hours", 0))*3600 + int(d.get("minutes", 0))*60 + int(d.get("seconds", 0))
-    duration = max(duration, 1)
+    d = request.json or {}
+    name = (d.get("name") or "").strip() or "משימה חדשה"
+    h = int(d.get("hours") or 0)
+    m = int(d.get("minutes") or 0)
+    ssec = int(d.get("seconds") or 0)
+    duration = h * 3600 + m * 60 + ssec
+    if duration <= 0:
+        duration = 60  # ברירת מחדל דקה אחת
     with session_scope() as s:
         max_pos = s.query(Task.position).order_by(Task.position.desc()).first()
         new_pos = (max_pos[0] + 1) if max_pos else 1
         t = Task(name=name, duration=duration, remaining=duration, status="pending", position=new_pos)
         s.add(t)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "added": True})
 
 @app.route("/reorder", methods=["POST"])
 def reorder():
@@ -173,28 +177,14 @@ def pause(id):
 def delete(id):
     with session_scope() as s:
         t = s.get(Task, id)
-        if t: s.delete(t)
-    return jsonify({"ok": True})
-
-@app.route("/update/<int:id>", methods=["POST"])
-def update(id):
-    d = request.json
-    with session_scope() as s:
-        t = s.get(Task, id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
-        t.name = d.get("name", t.name)
-        h, m, sec = int(d.get("hours", 0)), int(d.get("minutes", 0)), int(d.get("seconds", 0))
-        dur = h*3600 + m*60 + sec
-        if dur > 0:
-            t.duration = dur
-            t.remaining = dur
-        s.add(t)
+        if t:
+            s.delete(t)
     return jsonify({"ok": True})
 
 @app.route("/extend/<int:id>", methods=["POST"])
 def extend(id):
-    d = request.json
-    extra = int(d.get("hours", 0))*3600 + int(d.get("minutes", 0))*60 + int(d.get("seconds", 0))
+    d = request.json or {}
+    extra = int(d.get("hours", 0)) * 3600 + int(d.get("minutes", 0)) * 60 + int(d.get("seconds", 0))
     with session_scope() as s:
         t = s.get(Task, id)
         if t:
