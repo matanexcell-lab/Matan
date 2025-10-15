@@ -1,204 +1,121 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <title>טיימר משימות</title>
-  <style>
-    body { font-family: Arial, sans-serif; direction: rtl; }
-    h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
-    input[type="number"] { width: 60px; }
-    input[type="text"] { width: 160px; }
-    .muted { color: #777; font-size: 12px; }
-    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; }
-    .paused { background:#fff0b3; }
-    .pending { background:#f2f2f2; }
-    .done { background:#e6e6e6; text-decoration: line-through; color:#666; }
-    .actions button { margin: 2px; }
-  </style>
+<meta charset="utf-8">
+<title>מנהל משימות - גרסה עם גרירה</title>
+<style>
+body { font-family: Arial, sans-serif; direction: rtl; padding: 10px; }
+table { width: 100%; border-collapse: collapse; }
+th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+tr.dragging { opacity: 0.4; background: #ffffcc; }
+button { margin: 2px; }
+.badge { padding: 3px 6px; border-radius: 6px; }
+.running { background-color: #d6f5d6; }
+.paused { background-color: #fff0b3; }
+.pending { background-color: #eee; }
+.done { background-color: #ccc; text-decoration: line-through; }
+</style>
 </head>
 <body>
 
-<h1>טיימר משימות</h1>
-
-<div style="text-align:center;margin-bottom:12px">
-  <span id="now" class="muted"></span>
-  <br/>
-  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span>
-</div>
-
-<!-- הוספת משימה -->
-<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:10px">
-  <label>שם משימה חדשה
-    <input id="newName" type="text" placeholder="שם משימה">
-  </label>
-  <label>שעות <input id="newH" type="number" min="0" value="0"></label>
-  <label>דקות <input id="newM" type="number" min="0" value="0"></label>
-  <label>שניות <input id="newS" type="number" min="0" value="0"></label>
-  <button id="btnAdd">הוסף</button>
+<h2 style="text-align:center">📋 מנהל משימות עם שינוי סדר</h2>
+<div id="overall"></div>
+<div>
+  <input id="newName" placeholder="שם משימה">
+  <input id="newH" type="number" min="0" placeholder="שעות" style="width:60px">
+  <input id="newM" type="number" min="0" placeholder="דקות" style="width:60px">
+  <input id="newS" type="number" min="0" placeholder="שניות" style="width:60px">
+  <button onclick="addTask()">➕ הוסף משימה</button>
 </div>
 
 <table>
-  <thead>
-  <tr>
-    <th>שם</th>
-    <th>זמן התחלתי</th>
-    <th>זמן נותר</th>
-    <th>שעת סיום</th>
-    <th>סטטוס</th>
-    <th>עריכה</th>
-    <th>הארכה</th>
-    <th>פעולות</th>
-  </tr>
-  </thead>
-  <tbody id="tbody"></tbody>
+<thead>
+<tr><th>שם</th><th>זמן</th><th>נותר</th><th>סטטוס</th><th>פעולות</th></tr>
+</thead>
+<tbody id="tbody"></tbody>
 </table>
 
 <script>
-const $ = (sel) => document.querySelector(sel);
-let editingId = null;
-let extendingId = null;
-
 async function api(url, method="GET", body=null) {
-  const opt = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opt.body = JSON.stringify(body);
-  const res = await fetch(url, opt);
+  const opt = {method, headers:{'Content-Type':'application/json'}};
+  if(body) opt.body = JSON.stringify(body);
+  const res = await fetch(url,opt);
   return res.json();
 }
 
-async function addTask() {
-  const name = $("#newName").value.trim();
-  const hours = parseInt($("#newH").value || "0", 10);
-  const minutes = parseInt($("#newM").value || "0", 10);
-  const seconds = parseInt($("#newS").value || "0", 10);
-  await api("/add", "POST", { name, hours, minutes, seconds });
-  $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  await render(true);
-}
-
-async function startTask(id){ await api(`/start/${id}`,"POST"); await render(true); }
-async function pauseTask(id){ await api(`/pause/${id}`,"POST"); await render(true); }
-async function resetTask(id){ await api(`/reset/${id}`,"POST"); await render(true); }
-async function deleteTask(id){ await api(`/delete/${id}`,"POST"); await render(true); }
-async function skipTask(id){ await api(`/skip/${id}`,"POST"); await render(true); }
-async function setPending(id){ await api(`/set_pending/${id}`,"POST"); await render(true); }
-
-async function saveEdit(id){
-  const row = document.getElementById(`row-${id}`);
-  const name = row.querySelector(".edit-name").value.trim();
-  const hours = parseInt(row.querySelector(".edit-h").value||"0",10);
-  const minutes = parseInt(row.querySelector(".edit-m").value||"0",10);
-  const seconds = parseInt(row.querySelector(".edit-s").value||"0",10);
-  await api(`/update/${id}`, "POST", {name,hours,minutes,seconds});
-  editingId=null; await render(true);
-}
-function cancelEdit(){ editingId=null; render(true); }
-
-async function saveExtend(id){
-  const row = document.getElementById(`row-${id}`);
-  const minutes = parseInt(row.querySelector(".ext-m").value||"0",10);
-  const seconds = parseInt(row.querySelector(".ext-s").value||"0",10);
-  const total = minutes*60+seconds;
-  if(total>0){
-    await api(`/extend/${id}`, "POST", {seconds:total});
-  }
-  extendingId=null; await render(true);
-}
-function cancelExtend(){ extendingId=null; render(true); }
-
-function fmtHHMMSS(totalSeconds) {
-  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}
-
-function statusClass(st){
-  if (st === "running") return "badge running";
-  if (st === "paused")  return "badge paused";
-  if (st === "pending") return "badge pending";
-  return "badge done";
-}
-
-async function render(force=false) {
-  if(!force && (editingId || extendingId)) return;
-
+async function render() {
   const data = await api("/state");
-  $("#overallEnd").textContent = data.overall_end_time || "-";
-  $("#now").textContent = data.now || "";
-
-  const tb = $("#tbody");
-  tb.innerHTML = "";
-  data.tasks.sort((a,b)=>a.id-b.id).forEach(t => {
+  document.getElementById("overall").innerText = 
+    "שעת סיום כוללת: " + data.overall_end_time + " | עכשיו: " + data.now;
+  const tbody = document.getElementById("tbody");
+  tbody.innerHTML = "";
+  data.tasks.forEach(t=>{
     const tr = document.createElement("tr");
-    tr.id = `row-${t.id}`;
+    tr.draggable = true;
+    tr.dataset.id = t.id;
     tr.className = t.status;
+    tr.innerHTML = `
+      <td>${t.name}</td>
+      <td>${t.duration}s</td>
+      <td>${t.remaining_hhmmss}</td>
+      <td><span class="badge ${t.status}">${t.status}</span></td>
+      <td>
+        <button onclick="start(${t.id})">התחל</button>
+        <button onclick="pause(${t.id})">השהה</button>
+        <button onclick="del(${t.id})">מחק</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+  enableDrag();
+}
 
-    if(editingId===t.id){
-      tr.innerHTML=`
-        <td><input class="edit-name" value="${t.name.replace(/"/g,'&quot;')}"></td>
-        <td colspan="2">
-          <label>שעות <input type="number" class="edit-h" value="0" min="0"></label>
-          <label>דקות <input type="number" class="edit-m" value="0" min="0"></label>
-          <label>שניות <input type="number" class="edit-s" value="0" min="0"></label>
-        </td>
-        <td colspan="3"></td>
-        <td>
-          <button onclick="saveEdit(${t.id})">שמור</button>
-          <button onclick="cancelEdit()">בטל</button>
-        </td>`;
-    }
-    else if(extendingId===t.id){
-      tr.innerHTML=`
-        <td>${t.name}</td>
-        <td colspan="2">
-          <label>דקות <input type="number" class="ext-m" value="0" min="0"></label>
-          <label>שניות <input type="number" class="ext-s" value="0" min="0"></label>
-        </td>
-        <td colspan="3"></td>
-        <td>
-          <button onclick="saveExtend(${t.id})">בצע הארכה</button>
-          <button onclick="cancelExtend()">בטל</button>
-        </td>`;
-    }
-    else {
-      tr.innerHTML = `
-        <td>${t.name}</td>
-        <td class="muted">${fmtHHMMSS(t.duration)}</td>
-        <td><strong>${t.remaining_hhmmss}</strong></td>
-        <td>${t.end_time_str || "-"}</td>
-        <td><span class="${statusClass(t.status)}">${t.status}</span></td>
-        <td>
-          ${(t.status!=="running") ? `<button onclick="editingId=${t.id};render(true);">ערוך</button>` : `<span class="muted">נמנע</span>`}
-        </td>
-        <td>
-          <button onclick="extendingId=${t.id};render(true);">הארך</button>
-        </td>
-        <td class="actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
-          ${t.status==="running" ? `<button onclick="skipTask(${t.id})">דלג למשימה הבאה</button>` : ""}
-          ${t.status!=="running" ? `<button onclick="setPending(${t.id})">הפוך ל-Pending</button>` : ""}
-        </td>
-      `;
-    }
-    tb.appendChild(tr);
+async function addTask(){
+  const name=document.getElementById("newName").value;
+  const h=document.getElementById("newH").value;
+  const m=document.getElementById("newM").value;
+  const s=document.getElementById("newS").value;
+  await api("/add","POST",{name,hours:h,minutes:m,seconds:s});
+}
+
+async function start(id){await api("/start/"+id,"POST");}
+async function pause(id){await api("/pause/"+id,"POST");}
+async function del(id){await api("/delete/"+id,"POST");}
+
+setInterval(render,1000);
+render();
+
+// --- Drag & Drop ---
+let dragSrc = null;
+function enableDrag(){
+  const rows = document.querySelectorAll("#tbody tr");
+  rows.forEach(r=>{
+    r.addEventListener("dragstart", e=>{
+      dragSrc = r;
+      r.classList.add("dragging");
+      e.dataTransfer.effectAllowed = "move";
+    });
+    r.addEventListener("dragover", e=>{
+      e.preventDefault();
+      const dragging = document.querySelector(".dragging");
+      const target = e.target.closest("tr");
+      if(target && target!==dragging){
+        const tbody = target.parentNode;
+        const next = (e.clientY - target.getBoundingClientRect().top) > target.offsetHeight/2;
+        tbody.insertBefore(dragging, next? target.nextSibling: target);
+      }
+    });
+    r.addEventListener("drop", async ()=>{
+      r.classList.remove("dragging");
+      await saveOrder();
+    });
+    r.addEventListener("dragend", ()=>r.classList.remove("dragging"));
   });
 }
 
-// פולינג פעם בשנייה + רענון מיידי אחרי פעולה
-setInterval(() => render(false), 1000);
-render(true);
-
-document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
-document.getElementById("newName").addEventListener("keydown", async (e) => {
-  if(e.key==="Enter"){ await addTask(); }
-});
+async function saveOrder(){
+  const ids = Array.from(document.querySelectorAll("#tbody tr")).map(tr=>parseInt(tr.dataset.id));
+  await api("/reorder","POST",{order:ids});
+}
 </script>
 </body>
 </html>
