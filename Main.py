@@ -6,7 +6,7 @@ from flask import Flask, jsonify, render_template, request
 from sqlalchemy import Column, DateTime, Integer, String, create_engine
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# === הגדרות בסיסיות ===
+# === הגדרות בסיס ===
 TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
@@ -36,7 +36,7 @@ class Task(Base):
     name = Column(String, nullable=False)
     duration = Column(Integer, nullable=False)
     remaining = Column(Integer, nullable=False)
-    status = Column(String, nullable=False, default="pending")  # pending | running | paused | done
+    status = Column(String, nullable=False, default="pending")
     start_time = Column(DateTime(timezone=True))
     end_time = Column(DateTime(timezone=True))
     position = Column(Integer, nullable=False, default=0)
@@ -67,7 +67,7 @@ def hhmmss(sec):
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# === עדכון רצף משימות ===
+# === עדכון שרשרת ===
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -126,21 +126,31 @@ def state():
             "now": now().strftime("%H:%M:%S %d.%m.%Y")
         })
 
+# === הוספת משימה (תיקון מלא) ===
 @app.route("/add", methods=["POST"])
 def add_task():
-    data = request.json or {}
-    name = (data.get("name") or "משימה חדשה").strip()
-    hours = int(data.get("hours") or 0)
-    minutes = int(data.get("minutes") or 0)
-    seconds = int(data.get("seconds") or 0)
+    # תמיכה גם ב-JSON וגם ב-Form
+    if request.is_json:
+        data = request.get_json(force=True)
+    else:
+        data = request.form.to_dict() or {}
+
+    name = (data.get("name") or "").strip() or "משימה חדשה"
+    try:
+        hours = int(data.get("hours") or 0)
+        minutes = int(data.get("minutes") or 0)
+        seconds = int(data.get("seconds") or 0)
+    except ValueError:
+        hours, minutes, seconds = 0, 0, 0
+
     total = max(1, hours * 3600 + minutes * 60 + seconds)
 
     with session_scope() as s:
-        last_pos = s.query(Task.position).order_by(Task.position.desc()).first()
-        position = (last_pos[0] + 1) if last_pos else 1
-        t = Task(name=name, duration=total, remaining=total, status="pending", position=position)
+        max_pos = s.query(Task.position).order_by(Task.position.desc()).first()
+        new_pos = (max_pos[0] + 1) if max_pos else 1
+        t = Task(name=name, duration=total, remaining=total, status="pending", position=new_pos)
         s.add(t)
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "added": name, "duration": total})
 
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
