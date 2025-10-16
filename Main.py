@@ -20,7 +20,6 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base = declarative_base()
 
-
 @contextmanager
 def session_scope():
     session = Session()
@@ -61,19 +60,29 @@ class Task(Base):
             "position": self.position,
         }
 
-
 # === פונקציות עזר ===
 def now():
     return datetime.now(TZ)
-
 
 def hhmmss(sec):
     sec = max(0, int(sec))
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
+# === בדיקה ויצירה של טבלה אם חסרה ===
+def ensure_table_exists():
+    try:
+        inspector = inspect(engine)
+        if "tasks" not in inspector.get_table_names():
+            print("📦 Creating 'tasks' table automatically (lazy mode)...")
+            Base.metadata.create_all(engine)
+            print("✅ Table created successfully!")
+    except Exception as e:
+        print("⚠️ Error checking/creating table:", e)
 
+# === חישוב שרשרת משימות ===
 def recompute_chain():
+    ensure_table_exists()
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         t_now = now()
@@ -97,7 +106,6 @@ def recompute_chain():
                     t.remaining = remaining
                     s.add(t)
 
-
 def calc_overall_end():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -111,18 +119,17 @@ def calc_overall_end():
                 base += timedelta(seconds=t.remaining)
         return base
 
-
 # === Flask ===
 app = Flask(__name__)
 
-
 @app.route("/")
 def index():
+    ensure_table_exists()
     return render_template("index.html")
-
 
 @app.route("/state")
 def state():
+    ensure_table_exists()
     recompute_chain()
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -134,9 +141,9 @@ def state():
             "now": now().strftime("%H:%M:%S %d.%m.%Y")
         })
 
-
 @app.route("/add", methods=["POST"])
 def add_task():
+    ensure_table_exists()
     data = request.get_json(force=True)
     name = (data.get("name") or "משימה חדשה").strip()
     hours = int(data.get("hours") or 0)
@@ -151,9 +158,9 @@ def add_task():
         s.add(t)
     return jsonify({"ok": True, "added": name, "duration": total})
 
-
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
+    ensure_table_exists()
     with session_scope() as s:
         t = s.get(Task, task_id)
         if t and t.status in ("pending", "paused"):
@@ -163,9 +170,9 @@ def start_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
-
 @app.route("/pause/<int:task_id>", methods=["POST"])
 def pause_task(task_id):
+    ensure_table_exists()
     with session_scope() as s:
         t = s.get(Task, task_id)
         if t and t.status == "running":
@@ -176,18 +183,18 @@ def pause_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
-
 @app.route("/delete/<int:task_id>", methods=["POST"])
 def delete_task(task_id):
+    ensure_table_exists()
     with session_scope() as s:
         t = s.get(Task, task_id)
         if t:
             s.delete(t)
     return jsonify({"ok": True})
 
-
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
+    ensure_table_exists()
     data = request.json or {}
     with session_scope() as s:
         t = s.get(Task, task_id)
@@ -206,9 +213,9 @@ def update_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
-
 @app.route("/extend/<int:task_id>", methods=["POST"])
 def extend_task(task_id):
+    ensure_table_exists()
     data = request.json or {}
     extra = int(data.get("hours", 0)) * 3600 + int(data.get("minutes", 0)) * 60 + int(data.get("seconds", 0))
     with session_scope() as s:
@@ -221,9 +228,9 @@ def extend_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
-
 @app.route("/reorder", methods=["POST"])
 def reorder():
+    ensure_table_exists()
     order = request.json.get("order", [])
     with session_scope() as s:
         for idx, tid in enumerate(order, start=1):
@@ -233,17 +240,8 @@ def reorder():
                 s.add(t)
     return jsonify({"ok": True})
 
-
-# === יצירה אוטומטית של הטבלה גם בזמן עליית השרת ===
-try:
-    inspector = inspect(engine)
-    if "tasks" not in inspector.get_table_names():
-        print("📦 Creating 'tasks' table on startup...")
-        Base.metadata.create_all(engine)
-        print("✅ Table created successfully on startup!")
-except Exception as e:
-    print("⚠️ Error while ensuring table creation:", e)
-
+# === יצירת טבלה בהפעלה ראשונית ===
+ensure_table_exists()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
