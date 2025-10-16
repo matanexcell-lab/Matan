@@ -67,7 +67,7 @@ def hhmmss(sec):
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# === עדכון שרשרת ===
+# === חישוב שרשרת ===
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -92,7 +92,6 @@ def recompute_chain():
                     t.remaining = remaining
                     s.add(t)
 
-# === חישוב שעת סיום כוללת ===
 def calc_overall_end():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -126,7 +125,6 @@ def state():
             "now": now().strftime("%H:%M:%S %d.%m.%Y")
         })
 
-# === הוספת משימה (תיקון מלא) ===
 @app.route("/add", methods=["POST"])
 def add_task():
     # תמיכה גם ב-JSON וגם ב-Form
