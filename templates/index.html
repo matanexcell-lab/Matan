@@ -2,7 +2,7 @@
 <html lang="he" dir="rtl">
 <head>
 <meta charset="utf-8">
-<title>מנהל משימות</title>
+<title>מנהל משימות מלא</title>
 <style>
 body { font-family: Arial, sans-serif; direction: rtl; padding: 10px; }
 h2 { text-align: center; }
@@ -17,21 +17,25 @@ button { margin: 2px; }
 </style>
 </head>
 <body>
-<h2>📋 מנהל משימות</h2>
+<h2>🕒 טיימר משימות</h2>
 
-<div id="overall"></div>
+<div>
+  <strong id="overall"></strong>
+</div>
 
 <div>
   <input id="newName" placeholder="שם משימה">
   <input id="newH" type="number" min="0" placeholder="שעות" style="width:60px">
   <input id="newM" type="number" min="0" placeholder="דקות" style="width:60px">
   <input id="newS" type="number" min="0" placeholder="שניות" style="width:60px">
-  <button onclick="addTask()">➕ הוסף משימה</button>
+  <button id="btnAdd">➕ הוסף משימה</button>
 </div>
 
 <table>
 <thead>
-<tr><th>שם</th><th>משך</th><th>נותר</th><th>שעת סיום</th><th>סטטוס</th><th>פעולות</th></tr>
+<tr>
+  <th>שם</th><th>זמן כולל</th><th>נותר</th><th>שעת סיום</th><th>סטטוס</th><th>פעולות</th>
+</tr>
 </thead>
 <tbody id="tbody"></tbody>
 </table>
@@ -82,26 +86,28 @@ async function addTask(){
   document.getElementById("newH").value="";
   document.getElementById("newM").value="";
   document.getElementById("newS").value="";
-  render();
+  await render();
 }
 
-async function start(id){await api("/start/"+id,"POST");}
-async function pause(id){await api("/pause/"+id,"POST");}
-async function del(id){await api("/delete/"+id,"POST"); render();}
-async function extend(id){await api("/extend/"+id,"POST",{minutes:5});}
-
-async function updateName(id,newName){await api("/update/"+id,"POST",{name:newName});}
+async function start(id){await api(`/start/${id}`,"POST");}
+async function pause(id){await api(`/pause/${id}`,"POST");}
+async function del(id){await api(`/delete/${id}`,"POST"); render();}
+async function extend(id){await api(`/extend/${id}`,"POST",{minutes:5});}
+async function updateName(id,newName){await api(`/update/${id}`,"POST",{name:newName});}
 
 setInterval(render,1000);
+document.getElementById("btnAdd").addEventListener("click", addTask);
 render();
 
-// --- גרירה לסידור משימות ---
+// --- גרירה לסידור ---
 let dragSrc=null;
 function enableDrag(){
   const rows=document.querySelectorAll("#tbody tr");
   rows.forEach(r=>{
     r.addEventListener("dragstart",e=>{
-      dragSrc=r; r.classList.add("dragging"); e.dataTransfer.effectAllowed="move";
+      dragSrc=r;
+      r.classList.add("dragging");
+      e.dataTransfer.effectAllowed="move";
     });
     r.addEventListener("dragover",e=>{
       e.preventDefault();
