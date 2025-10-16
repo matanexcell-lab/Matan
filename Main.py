@@ -60,27 +60,36 @@ class Task(Base):
             "position": self.position,
         }
 
+
 # === פונקציות עזר ===
 def now():
     return datetime.now(TZ)
+
 
 def hhmmss(sec):
     sec = max(0, int(sec))
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# === בדיקה ויצירה של טבלה אם חסרה ===
-def ensure_table_exists():
-    try:
-        inspector = inspect(engine)
-        if "tasks" not in inspector.get_table_names():
-            print("📦 Creating 'tasks' table automatically (lazy mode)...")
-            Base.metadata.create_all(engine)
-            print("✅ Table created successfully!")
-    except Exception as e:
-        print("⚠️ Error checking/creating table:", e)
 
-# === חישוב שרשרת משימות ===
+def ensure_table_exists():
+    """ודאות שהטבלה tasks קיימת ב-PostgreSQL (סכימה public)."""
+    try:
+        insp = inspect(engine)
+        exists = False
+        try:
+            exists = insp.has_table("tasks", schema="public")
+        except Exception:
+            exists = insp.has_table("tasks")
+        if not exists:
+            print("📦 Creating 'tasks' table (public schema)...")
+            with engine.begin() as conn:
+                Base.metadata.create_all(bind=conn)
+            print("✅ 'tasks' table created successfully!")
+    except Exception as e:
+        print("⚠️ ensure_table_exists error:", e)
+
+
 def recompute_chain():
     ensure_table_exists()
     with session_scope() as s:
@@ -106,6 +115,7 @@ def recompute_chain():
                     t.remaining = remaining
                     s.add(t)
 
+
 def calc_overall_end():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -119,13 +129,16 @@ def calc_overall_end():
                 base += timedelta(seconds=t.remaining)
         return base
 
+
 # === Flask ===
 app = Flask(__name__)
+
 
 @app.route("/")
 def index():
     ensure_table_exists()
     return render_template("index.html")
+
 
 @app.route("/state")
 def state():
@@ -140,6 +153,7 @@ def state():
             "overall_end_time": end_str,
             "now": now().strftime("%H:%M:%S %d.%m.%Y")
         })
+
 
 @app.route("/add", methods=["POST"])
 def add_task():
@@ -158,6 +172,7 @@ def add_task():
         s.add(t)
     return jsonify({"ok": True, "added": name, "duration": total})
 
+
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
     ensure_table_exists()
@@ -169,6 +184,7 @@ def start_task(task_id):
             t.status = "running"
             s.add(t)
     return jsonify({"ok": True})
+
 
 @app.route("/pause/<int:task_id>", methods=["POST"])
 def pause_task(task_id):
@@ -183,6 +199,7 @@ def pause_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/delete/<int:task_id>", methods=["POST"])
 def delete_task(task_id):
     ensure_table_exists()
@@ -191,6 +208,7 @@ def delete_task(task_id):
         if t:
             s.delete(t)
     return jsonify({"ok": True})
+
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
@@ -213,6 +231,7 @@ def update_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/extend/<int:task_id>", methods=["POST"])
 def extend_task(task_id):
     ensure_table_exists()
@@ -228,6 +247,7 @@ def extend_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/reorder", methods=["POST"])
 def reorder():
     ensure_table_exists()
@@ -239,6 +259,7 @@ def reorder():
                 t.position = idx
                 s.add(t)
     return jsonify({"ok": True})
+
 
 # === יצירת טבלה בהפעלה ראשונית ===
 ensure_table_exists()
