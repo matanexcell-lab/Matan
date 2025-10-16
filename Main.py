@@ -3,16 +3,19 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 import pytz
 from flask import Flask, jsonify, render_template, request
-from sqlalchemy import Column, DateTime, Integer, String, create_engine
+from sqlalchemy import Column, DateTime, Integer, String, create_engine, inspect
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 # === הגדרות בסיס ===
 TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
+
+# תיאום לגרסת postgres
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
+# יצירת מנוע SQLAlchemy
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base = declarative_base()
@@ -29,7 +32,7 @@ def session_scope():
     finally:
         session.close()
 
-# === טבלת משימות ===
+# === טבלת המשימות ===
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -56,7 +59,12 @@ class Task(Base):
             "position": self.position,
         }
 
-Base.metadata.create_all(engine)
+# === יצירה אוטומטית של הטבלאות אם חסרות ===
+inspector = inspect(engine)
+if "tasks" not in inspector.get_table_names():
+    print("📦 Creating 'tasks' table automatically...")
+    Base.metadata.create_all(engine)
+    print("✅ Table created successfully!")
 
 # === פונקציות עזר ===
 def now():
@@ -67,7 +75,7 @@ def hhmmss(sec):
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# === חישוב שרשרת ===
+# === חישוב שרשרת משימות ===
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -127,7 +135,6 @@ def state():
 
 @app.route("/add", methods=["POST"])
 def add_task():
-    # תמיכה גם ב-JSON וגם ב-Form
     if request.is_json:
         data = request.get_json(force=True)
     else:
