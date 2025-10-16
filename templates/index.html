@@ -76,12 +76,31 @@ async function render(){
   enableDrag();
 }
 
+// === כאן השינוי הקריטי ===
 async function addTask(){
-  const name=document.getElementById("newName").value;
+  const name=document.getElementById("newName").value.trim();
   const h=document.getElementById("newH").value||0;
   const m=document.getElementById("newM").value||0;
   const s=document.getElementById("newS").value||0;
-  await api("/add","POST",{name,hours:h,minutes:m,seconds:s});
+
+  try {
+    const res=await fetch("/add",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({name,hours:h,minutes:m,seconds:s})
+    });
+    if(!res.ok) throw new Error("Bad response");
+    console.log("נשלחה בקשת JSON בהצלחה");
+  } catch(e){
+    console.warn("JSON נכשל, מנסה FormData...");
+    const fd=new FormData();
+    fd.append("name",name);
+    fd.append("hours",h);
+    fd.append("minutes",m);
+    fd.append("seconds",s);
+    await fetch("/add",{method:"POST",body:fd});
+  }
+
   document.getElementById("newName").value="";
   document.getElementById("newH").value="";
   document.getElementById("newM").value="";
