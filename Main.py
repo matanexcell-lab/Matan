@@ -6,19 +6,20 @@ from flask import Flask, jsonify, render_template, request
 from sqlalchemy import Column, DateTime, Integer, String, create_engine, inspect
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# === הגדרות בסיס ===
+# === הגדרות כלליות ===
 TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
 
-# תיאום לגרסת postgres
+# תיאום לגרסת PostgreSQL של Render
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# יצירת מנוע SQLAlchemy
+# יצירת מנוע מסד הנתונים
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, expire_on_commit=False))
 Base = declarative_base()
+
 
 @contextmanager
 def session_scope():
@@ -32,7 +33,8 @@ def session_scope():
     finally:
         session.close()
 
-# === טבלת המשימות ===
+
+# === מודל הטבלה ===
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True, autoincrement=True)
@@ -59,23 +61,18 @@ class Task(Base):
             "position": self.position,
         }
 
-# === יצירה אוטומטית של הטבלאות אם חסרות ===
-inspector = inspect(engine)
-if "tasks" not in inspector.get_table_names():
-    print("📦 Creating 'tasks' table automatically...")
-    Base.metadata.create_all(engine)
-    print("✅ Table created successfully!")
 
 # === פונקציות עזר ===
 def now():
     return datetime.now(TZ)
+
 
 def hhmmss(sec):
     sec = max(0, int(sec))
     h, m, s = sec // 3600, (sec % 3600) // 60, sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# === חישוב שרשרת משימות ===
+
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -100,6 +97,7 @@ def recompute_chain():
                     t.remaining = remaining
                     s.add(t)
 
+
 def calc_overall_end():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -113,12 +111,15 @@ def calc_overall_end():
                 base += timedelta(seconds=t.remaining)
         return base
 
+
 # === Flask ===
 app = Flask(__name__)
+
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.route("/state")
 def state():
@@ -133,21 +134,14 @@ def state():
             "now": now().strftime("%H:%M:%S %d.%m.%Y")
         })
 
+
 @app.route("/add", methods=["POST"])
 def add_task():
-    if request.is_json:
-        data = request.get_json(force=True)
-    else:
-        data = request.form.to_dict() or {}
-
-    name = (data.get("name") or "").strip() or "משימה חדשה"
-    try:
-        hours = int(data.get("hours") or 0)
-        minutes = int(data.get("minutes") or 0)
-        seconds = int(data.get("seconds") or 0)
-    except ValueError:
-        hours, minutes, seconds = 0, 0, 0
-
+    data = request.get_json(force=True)
+    name = (data.get("name") or "משימה חדשה").strip()
+    hours = int(data.get("hours") or 0)
+    minutes = int(data.get("minutes") or 0)
+    seconds = int(data.get("seconds") or 0)
     total = max(1, hours * 3600 + minutes * 60 + seconds)
 
     with session_scope() as s:
@@ -156,6 +150,7 @@ def add_task():
         t = Task(name=name, duration=total, remaining=total, status="pending", position=new_pos)
         s.add(t)
     return jsonify({"ok": True, "added": name, "duration": total})
+
 
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start_task(task_id):
@@ -167,6 +162,7 @@ def start_task(task_id):
             t.status = "running"
             s.add(t)
     return jsonify({"ok": True})
+
 
 @app.route("/pause/<int:task_id>", methods=["POST"])
 def pause_task(task_id):
@@ -180,6 +176,7 @@ def pause_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/delete/<int:task_id>", methods=["POST"])
 def delete_task(task_id):
     with session_scope() as s:
@@ -187,6 +184,7 @@ def delete_task(task_id):
         if t:
             s.delete(t)
     return jsonify({"ok": True})
+
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update_task(task_id):
@@ -208,6 +206,7 @@ def update_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/extend/<int:task_id>", methods=["POST"])
 def extend_task(task_id):
     data = request.json or {}
@@ -222,6 +221,7 @@ def extend_task(task_id):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/reorder", methods=["POST"])
 def reorder():
     order = request.json.get("order", [])
@@ -232,6 +232,18 @@ def reorder():
                 t.position = idx
                 s.add(t)
     return jsonify({"ok": True})
+
+
+# === יצירה אוטומטית של הטבלה גם בזמן עליית השרת ===
+try:
+    inspector = inspect(engine)
+    if "tasks" not in inspector.get_table_names():
+        print("📦 Creating 'tasks' table on startup...")
+        Base.metadata.create_all(engine)
+        print("✅ Table created successfully on startup!")
+except Exception as e:
+    print("⚠️ Error while ensuring table creation:", e)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
