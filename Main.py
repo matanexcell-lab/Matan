@@ -24,15 +24,15 @@ class Task(db.Model):
     end_time = db.Column(db.DateTime, nullable=True)
     position = db.Column(db.Integer, default=0)
 
+
 # ---- Ensure table exists ----
 def ensure_table_exists():
     try:
         insp = inspect(db.engine)
-        tables = insp.get_table_names(schema="public") if "public" in insp.get_schema_names() else insp.get_table_names()
-        if "tasks" not in tables:
+        if "tasks" not in insp.get_table_names():
             print("📦 Creating 'tasks' table...")
-            with db.engine.begin() as conn:
-                db.metadata.create_all(bind=conn)
+            with app.app_context():
+                db.create_all()
             print("✅ 'tasks' table created successfully!")
     except Exception as e:
         print("⚠️ ensure_table_exists error:", e)
@@ -53,6 +53,7 @@ def index():
 
 @app.route("/add", methods=["POST"])
 def add_task():
+    ensure_table_exists()
     data = request.json
     new_task = Task(
         name=data["name"],
@@ -68,6 +69,7 @@ def add_task():
 
 @app.route("/update", methods=["POST"])
 def update_task():
+    ensure_table_exists()
     data = request.json
     task = Task.query.get(data["id"])
     if not task:
@@ -82,6 +84,7 @@ def update_task():
 
 @app.route("/delete/<int:task_id>", methods=["DELETE"])
 def delete_task(task_id):
+    ensure_table_exists()
     task = Task.query.get(task_id)
     if task:
         db.session.delete(task)
@@ -91,6 +94,7 @@ def delete_task(task_id):
 
 @app.route("/reorder", methods=["POST"])
 def reorder_tasks():
+    ensure_table_exists()
     data = request.json  # list of task IDs in new order
     for i, task_id in enumerate(data["order"]):
         task = Task.query.get(task_id)
@@ -124,6 +128,8 @@ def state():
     return jsonify(out)
 
 
+# ---- Run ----
 if __name__ == "__main__":
-    ensure_table_exists()
+    with app.app_context():
+        db.create_all()  # ייצור אוטומטית את כל הטבלאות אם חסרות
     app.run(host="0.0.0.0", port=10000)
