@@ -6,7 +6,7 @@
   <style>
     body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; margin-top:10px; background:white; }
+    table { width: 100%; border-collapse: collapse; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
     input[type="number"] { width: 60px; }
     input[type="text"] { width: 160px; }
@@ -17,6 +17,8 @@
     .pending { background:#f2f2f2; }
     .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
+    .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+    .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .toolbar { text-align:center; margin-bottom:12px }
   </style>
 </head>
@@ -29,6 +31,7 @@
   <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span>
 </div>
 
+<!-- הוספת משימה -->
 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:10px">
   <label>שם משימה חדשה
     <input id="newName" type="text" placeholder="שם משימה">
@@ -48,7 +51,8 @@
     <th>שעת סיום</th>
     <th>סטטוס</th>
     <th>עריכה</th>
-    <th>העברה</th>
+    <th>הארכה</th>
+    <th>העבר</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -57,116 +61,126 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
-let editing = false;
-let editTimeout = null;
-let refreshTimer = null;
+
+function fmtHHMMSS(totalSeconds) {
+  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
 
 async function api(url, method="GET", body=null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body) opt.body = JSON.stringify(body);
   const res = await fetch(url, opt);
   if (!res.ok) {
-    const msg = (await res.json()).error || res.statusText;
+    let msg;
+    try { msg = (await res.json()).error || res.statusText; } catch(e) { msg = res.statusText; }
     throw new Error(msg);
   }
   return res.json();
 }
 
+async function addTask() {
+  const name = $("#newName").value.trim();
+  const hours = parseInt($("#newH").value || "0", 10);
+  const minutes = parseInt($("#newM").value || "0", 10);
+  const seconds = parseInt($("#newS").value || "0", 10);
+  await api("/add", "POST", { name, hours, minutes, seconds });
+  $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
+  render();
+}
+
+async function startTask(id){ await api(`/start/${id}`,"POST"); }
+async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
+async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
+async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
+async function extendTask(id){
+  const row = document.getElementById(`row-${id}`);
+  const h = parseInt(row.querySelector(".ext-h").value || "0",10);
+  const m = parseInt(row.querySelector(".ext-m").value || "0",10);
+  const s = parseInt(row.querySelector(".ext-s").value || "0",10);
+  await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
+}
+
+async function saveEdit(id){
+  const row = document.getElementById(`row-${id}`);
+  const nm = row.querySelector(".edit-name").value;
+  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
+  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
+  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
+  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+}
+
+async function moveTask(id){
+  const row = document.getElementById(`row-${id}`);
+  const newPos = parseInt(row.querySelector(".move-pos").value || "1");
+  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  render();
+}
+
+function badgeClass(st){
+  if (st === "running") return "badge running";
+  if (st === "paused")  return "badge paused";
+  if (st === "pending") return "badge pending";
+  return "badge done";
+}
+
 async function render() {
-  if (editing) return; // אל תעדכן בזמן עריכה
   const data = await api("/state");
-  $("#overallEnd").textContent = data.overall_end_time;
-  $("#now").textContent = data.now;
+  $("#overallEnd").textContent = data.overall_end_time || "-";
+  $("#now").textContent = data.now || "";
   const tb = $("#tbody");
   tb.innerHTML = "";
+
   data.tasks.forEach(t => {
     const tr = document.createElement("tr");
     tr.id = `row-${t.id}`;
     tr.className = t.status;
     const canEdit = (t.status !== "running");
     tr.innerHTML = `
-      <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
-      <td>${t.duration}</td>
-      <td>${t.remaining_hhmmss}</td>
-      <td>${t.end_time_str}</td>
-      <td>${t.status}</td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}></td>
+      <td class="muted">${fmtHHMMSS(t.duration)}</td>
+      <td><strong>${t.remaining_hhmmss}</strong></td>
+      <td>${t.end_time_str || "-"}</td>
+      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
-        <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>
-        <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>
-        <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
+        <div class="edit-grid">
+          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}>
+          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}>
+          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}>
+          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
+        </div>
+      </td>
+      <td>
+        <div class="extend-grid">
+          <input class="ext-h" type="number" min="0" value="0">
+          <input class="ext-m" type="number" min="0" value="0">
+          <input class="ext-s" type="number" min="0" value="0">
+          <button onclick="extendTask(${t.id})">הארך</button>
+        </div>
       </td>
       <td>
         <input class="move-pos" type="number" min="1" value="${t.position+1}" style="width:50px">
         <button onclick="moveTask(${t.id})">העבר</button>
       </td>
       <td>
-        <button onclick="startTask(${t.id})">התחל</button>
-        <button onclick="pauseTask(${t.id})">השהה</button>
-        <button onclick="resetTask(${t.id})">איפוס</button>
-        <button onclick="deleteTask(${t.id})">מחק</button>
+        <div class="row-actions">
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+        </div>
       </td>
     `;
     tb.appendChild(tr);
   });
-
-  // מאזינים לעריכה
-  document.querySelectorAll(".edit-name, .edit-h, .edit-m, .edit-s").forEach(inp=>{
-    inp.addEventListener("focus",()=>{
-      editing=true;
-      clearInterval(refreshTimer);
-    });
-    inp.addEventListener("blur",()=>{
-      editing=false;
-      startAutoRefresh();
-    });
-    inp.addEventListener("input",()=>{
-      clearTimeout(editTimeout);
-      const id = parseInt(inp.closest("tr").id.split("-")[1]);
-      editTimeout=setTimeout(()=>saveEdit(id),1000);
-    });
-  });
 }
 
-async function saveEdit(id){
-  const row=document.getElementById(`row-${id}`);
-  if(!row)return;
-  const nm=row.querySelector(".edit-name").value;
-  const h=parseInt(row.querySelector(".edit-h").value||"0");
-  const m=parseInt(row.querySelector(".edit-m").value||"0");
-  const s=parseInt(row.querySelector(".edit-s").value||"0");
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  render();
-}
-
-async function moveTask(id){
-  const row=document.getElementById(`row-${id}`);
-  const newPos=parseInt(row.querySelector(".move-pos").value||"1");
-  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  render();
-}
-
-async function startTask(id){await api(`/start/${id}`,"POST");render();}
-async function pauseTask(id){await api(`/pause/${id}`,"POST");render();}
-async function resetTask(id){await api(`/reset/${id}`,"POST");render();}
-async function deleteTask(id){await api(`/delete/${id}`,"POST");render();}
-async function addTask(){
-  const name=$("#newName").value||"משימה";
-  const h=parseInt($("#newH").value||"0");
-  const m=parseInt($("#newM").value||"0");
-  const s=parseInt($("#newS").value||"0");
-  await api("/add","POST",{name,hours:h,minutes:m,seconds:s});
-  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  render();
-}
-
-function startAutoRefresh(){
-  clearInterval(refreshTimer);
-  refreshTimer=setInterval(()=>{if(!editing)render();},1000);
-}
-
-startAutoRefresh();
+setInterval(render, 1000);
 render();
-$("#btnAdd").addEventListener("click",addTask);
+$("#btnAdd").addEventListener("click", addTask);
 </script>
 </body>
 </html>
