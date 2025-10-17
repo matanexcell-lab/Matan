@@ -58,7 +58,6 @@ class Task(Base):
             "status": self.status,
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "end_time_str": self.end_time.astimezone(TZ).strftime("%H:%M:%S") if self.end_time else "-",
-            "position": self.position
         }
 
 Base.metadata.create_all(engine)
@@ -101,7 +100,6 @@ def recompute_chain_in_db():
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
-                    # מפעיל את המשימה הבאה אוטומטית
                     if idx + 1 < len(tasks):
                         nxt = tasks[idx + 1]
                         if nxt.status == "pending":
@@ -246,36 +244,19 @@ def extend(task_id):
         s.add(t)
     return jsonify({"ok": True})
 
-# ===== שינוי מיקום משימה בודדת =====
-@app.route("/reorder_single", methods=["POST"])
-def reorder_single():
+@app.route("/reorder", methods=["POST"])
+def reorder():
+    """עדכון סדר המשימות לפי רשימת מזהים"""
     data = request.json or {}
-    task_id = data.get("task_id")
-    new_position = int(data.get("new_position", 0))
-
-    if not task_id:
-        return jsonify({"ok": False, "error": "no task_id provided"}), 400
-
+    order = data.get("order", [])
+    if not order:
+        return jsonify({"ok": False, "error": "no order provided"}), 400
     with session_scope() as s:
-        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
-        ids = [t.id for t in tasks]
-
-        if task_id not in ids:
-            return jsonify({"ok": False, "error": "task not found"}), 404
-
-        old_index = ids.index(task_id)
-        new_index = max(0, min(new_position - 1, len(ids) - 1))
-
-        # הוצאה והכנסה מחדש במיקום חדש
-        ids.insert(new_index, ids.pop(old_index))
-
-        # עדכון כל ה־position מחדש
-        for idx, tid in enumerate(ids):
-            t = s.get(Task, tid)
+        for idx, task_id in enumerate(order):
+            t = s.get(Task, task_id)
             if t:
                 t.position = idx
                 s.add(t)
-
     return jsonify({"ok": True})
 
 
