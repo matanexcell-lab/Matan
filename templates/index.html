@@ -1,6 +1,4 @@
-
-
- <!doctype html>
+<!doctype html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8"/>
@@ -54,7 +52,7 @@
     <th>זמן נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה (כשלא פעילה)</th>
+    <th>עריכה</th>
     <th>הארכה</th>
     <th>פעולות</th>
     <th>מיקום</th>
@@ -65,6 +63,8 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
+let isEditing = false;
+let editTimeout;
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -96,26 +96,34 @@ async function addTask() {
   render();
 }
 
-async function startTask(id){ await api(`/start/${id}`,"POST"); }
-async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
-async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
-async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
-async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
-async function skipToNext(id){ await api(`/skip/${id}`, "POST"); }
+async function startTask(id){ await api(`/start/${id}`,"POST"); render(); }
+async function pauseTask(id){ await api(`/pause/${id}`,"POST"); render(); }
+async function resetTask(id){ await api(`/reset/${id}`,"POST"); render(); }
+async function deleteTask(id){ await api(`/delete/${id}`,"POST"); render(); }
+async function setPending(id){ await api(`/set_pending/${id}`, "POST"); render(); }
+async function skipToNext(id){ await api(`/skip/${id}`, "POST"); render(); }
+
 async function extendTask(id){
   const row = document.getElementById(`row-${id}`);
   const h = parseInt(row.querySelector(".ext-h").value || "0",10);
   const m = parseInt(row.querySelector(".ext-m").value || "0",10);
   const s = parseInt(row.querySelector(".ext-s").value || "0",10);
   await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
+  render();
 }
-async function saveEdit(id){
-  const row = document.getElementById(`row-${id}`);
-  const nm = row.querySelector(".edit-name").value;
-  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
-  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
-  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+
+function autoSave(id){
+  clearTimeout(editTimeout);
+  editTimeout = setTimeout(async ()=>{
+    const row = document.getElementById(`row-${id}`);
+    if(!row) return;
+    const nm = row.querySelector(".edit-name").value;
+    const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
+    const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
+    const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
+    await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+    render();
+  }, 1000);
 }
 
 async function moveTask(id){
@@ -133,13 +141,14 @@ function badgeClass(st){
 }
 
 async function render() {
+  if (isEditing) return;
   const data = await api("/state");
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
 
   const tb = $("#tbody");
   tb.innerHTML = "";
-  data.tasks.forEach((t, idx) => {
+  data.tasks.forEach((t) => {
     const tr = document.createElement("tr");
     tr.id = `row-${t.id}`;
     tr.className = t.status;
@@ -156,7 +165,6 @@ async function render() {
           <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
           <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
           <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
-          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
         </div>
       </td>
       <td>
@@ -173,7 +181,7 @@ async function render() {
           <button onclick="pauseTask(${t.id})">השהה</button>
           <button onclick="resetTask(${t.id})">איפוס</button>
           <button onclick="setPending(${t.id})">ל-pending</button>
-          <button onclick="skipToNext(${t.id})">דלג לבאה</button>
+          <button onclick="skipToNext(${t.id})">דלג</button>
           <button onclick="deleteTask(${t.id})">מחק</button>
         </div>
       </td>
@@ -184,11 +192,23 @@ async function render() {
     `;
     tb.appendChild(tr);
   });
+
+  // אירועי עריכה חכמים
+  document.querySelectorAll(".edit-name, .edit-h, .edit-m, .edit-s").forEach(inp => {
+    inp.addEventListener("focus", () => isEditing = true);
+    inp.addEventListener("blur", () => { isEditing = false; });
+    inp.addEventListener("input", () => {
+      const row = inp.closest("tr");
+      const id = parseInt(row.id.split("-")[1]);
+      autoSave(id);
+    });
+  });
 }
 
-setInterval(render, 1000);
+// רענון כל שנייה רק אם לא עורכים
+setInterval(() => { if (!isEditing) render(); }, 1000);
 render();
 $("#btnAdd").addEventListener("click", addTask);
 </script>
 </body>
-</html> 
+</html>
