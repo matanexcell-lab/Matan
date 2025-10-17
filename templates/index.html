@@ -4,9 +4,9 @@
   <meta charset="utf-8"/>
   <title>טיימר משימות</title>
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
     input[type="number"] { width: 60px; }
     input[type="text"] { width: 160px; }
@@ -21,11 +21,12 @@
     .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .toolbar { text-align:center; margin-bottom:12px }
+    button { cursor:pointer; }
   </style>
 </head>
 <body>
 
-<h1>טיימר משימות</h1>
+<h1>⏱️ טיימר משימות</h1>
 
 <div class="toolbar">
   <span id="now" class="muted"></span><br/>
@@ -40,7 +41,7 @@
   <label>שעות <input id="newH" type="number" min="0" value="0"></label>
   <label>דקות <input id="newM" type="number" min="0" value="0"></label>
   <label>שניות <input id="newS" type="number" min="0" value="0"></label>
-  <button id="btnAdd">הוסף</button>
+  <button id="btnAdd">➕ הוסף</button>
 </div>
 
 <table>
@@ -51,7 +52,7 @@
     <th>זמן נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה (כשלא פעילה)</th>
+    <th>עריכה</th>
     <th>הארכה חופשית</th>
     <th>פעולות</th>
   </tr>
@@ -89,16 +90,15 @@ async function addTask() {
   const seconds = parseInt($("#newS").value || "0", 10);
   await api("/add", "POST", { name, hours, minutes, seconds });
   $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  render(); // עדכון מיידי בלי לחכות לפולינג
+  render(); // עדכון מיידי
 }
 
-async function startTask(id){ await api(`/start/${id}`,"POST"); }
-async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
-async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
-async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
-
-async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
-async function skipToNext(id){ await api(`/skip/${id}`, "POST"); }
+async function startTask(id){ await api(`/start/${id}`,"POST"); render(); }
+async function pauseTask(id){ await api(`/pause/${id}`,"POST"); render(); }
+async function resetTask(id){ await api(`/reset/${id}`,"POST"); render(); }
+async function deleteTask(id){ await api(`/delete/${id}`,"POST"); render(); }
+async function setPending(id){ await api(`/set_pending/${id}`,"POST"); render(); }
+async function skipToNext(id){ await api(`/skip/${id}`,"POST"); render(); }
 
 async function extendTask(id){
   const row = document.getElementById(`row-${id}`);
@@ -106,15 +106,22 @@ async function extendTask(id){
   const m = parseInt(row.querySelector(".ext-m").value || "0",10);
   const s = parseInt(row.querySelector(".ext-s").value || "0",10);
   await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
+  render();
 }
 
 async function saveEdit(id){
   const row = document.getElementById(`row-${id}`);
-  const nm = row.querySelector(".edit-name").value;
+  const nm = row.querySelector(".edit-name").value.trim();
   const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
   const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
   const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+
+  try {
+    await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+    render();
+  } catch (e) {
+    alert("שגיאה בעדכון המשימה: " + e.message);
+  }
 }
 
 function badgeClass(st){
@@ -136,22 +143,18 @@ async function render() {
     tr.id = `row-${t.id}`;
     tr.className = t.status;
 
-    const canEdit = (t.status !== "running");
-
     tr.innerHTML = `
-      <td>
-        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
-      </td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}"></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
       <td>${t.end_time_str || "-"}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
-          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
+          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}"></label>
+          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}"></label>
+          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}"></label>
+          <button onclick="saveEdit(${t.id})">עדכן</button>
         </div>
       </td>
       <td>
@@ -177,12 +180,10 @@ async function render() {
   });
 }
 
-// פולינג כל שנייה + הוספה מיידית
+// רענון כל שנייה
 setInterval(render, 1000);
 render();
-document.getElementById("btnAdd").addEventListener("click", async () => { 
-  await addTask(); 
-});
+document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
 </script>
 </body>
 </html>
