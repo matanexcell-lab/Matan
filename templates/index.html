@@ -1,136 +1,188 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="he" dir="rtl">
 <head>
-    <meta charset="UTF-8">
-    <title>מנהל משימות</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background: #f7f8fa;
-            text-align: center;
-            padding: 40px;
-            direction: rtl;
-        }
-        h1 {
-            color: #333;
-        }
-        #taskList {
-            margin-top: 30px;
-            display: inline-block;
-            text-align: right;
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            box-shadow: 0 0 8px rgba(0,0,0,0.1);
-        }
-        .task {
-            border-bottom: 1px solid #ddd;
-            padding: 10px 0;
-        }
-        .task:last-child {
-            border-bottom: none;
-        }
-        .btn {
-            padding: 6px 12px;
-            background: #007bff;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-        }
-        .btn:hover {
-            background: #0056b3;
-        }
-        input {
-            padding: 8px;
-            border-radius: 5px;
-            border: 1px solid #ccc;
-            margin: 5px;
-        }
-        #status {
-            margin-top: 15px;
-            color: green;
-            font-weight: bold;
-        }
-    </style>
+  <meta charset="utf-8"/>
+  <title>טיימר משימות</title>
+  <style>
+    body { font-family: Arial, sans-serif; direction: rtl; }
+    h1 { text-align:center; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+    input[type="number"] { width: 60px; }
+    input[type="text"] { width: 160px; }
+    .muted { color: #777; font-size: 12px; }
+    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
+    .running { background:#d9ffd9; }
+    .paused  { background:#fff0b3; }
+    .pending { background:#f2f2f2; }
+    .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
+    .actions button { margin: 0 2px; }
+    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
+    .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+    .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+    .toolbar { text-align:center; margin-bottom:12px }
+  </style>
 </head>
 <body>
 
-    <h1>🗓️ מנהל משימות</h1>
+<h1>טיימר משימות</h1>
 
-    <div>
-        <input type="text" id="taskName" placeholder="שם המשימה">
-        <input type="number" id="taskDuration" placeholder="משך (בדקות)">
-        <button class="btn" onclick="addTask()">➕ הוסף משימה</button>
-    </div>
+<div class="toolbar">
+  <span id="now" class="muted"></span><br/>
+  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span>
+</div>
 
-    <div id="status"></div>
+<!-- הוספת משימה -->
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:10px">
+  <label>שם משימה חדשה
+    <input id="newName" type="text" placeholder="שם משימה">
+  </label>
+  <label>שעות <input id="newH" type="number" min="0" value="0"></label>
+  <label>דקות <input id="newM" type="number" min="0" value="0"></label>
+  <label>שניות <input id="newS" type="number" min="0" value="0"></label>
+  <button id="btnAdd">הוסף</button>
+</div>
 
-    <div id="taskList"></div>
+<table>
+  <thead>
+  <tr>
+    <th>שם</th>
+    <th>זמן התחלתי</th>
+    <th>זמן נותר</th>
+    <th>שעת סיום</th>
+    <th>סטטוס</th>
+    <th>עריכה (כשלא פעילה)</th>
+    <th>הארכה חופשית</th>
+    <th>פעולות</th>
+  </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
 
-    <script>
-        async function loadTasks() {
-            const res = await fetch("/state");
-            const tasks = await res.json();
-            const list = document.getElementById("taskList");
-            list.innerHTML = "";
+<script>
+const $ = (sel) => document.querySelector(sel);
 
-            if (tasks.length === 0) {
-                list.innerHTML = "<p>אין משימות עדיין 😴</p>";
-                return;
-            }
+function fmtHHMMSS(totalSeconds) {
+  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
+  const h = Math.floor(totalSeconds / 3600);
+  const m = Math.floor((totalSeconds % 3600) / 60);
+  const s = totalSeconds % 60;
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
 
-            for (const t of tasks) {
-                const div = document.createElement("div");
-                div.className = "task";
-                div.innerHTML = `
-                    <b>${t.name}</b> – ${t.duration} דקות<br>
-                    סטטוס: ${t.status} | נותר: ${t.remaining} דקות
-                    <br>
-                    <button class="btn" onclick="deleteTask(${t.id})">🗑️ מחק</button>
-                `;
-                list.appendChild(div);
-            }
-        }
+async function api(url, method="GET", body=null) {
+  const opt = { method, headers: { "Content-Type": "application/json" } };
+  if (body) opt.body = JSON.stringify(body);
+  const res = await fetch(url, opt);
+  if (!res.ok) {
+    let msg;
+    try { msg = (await res.json()).error || res.statusText; } catch(e) { msg = res.statusText; }
+    throw new Error(msg);
+  }
+  return res.json();
+}
 
-        async function addTask() {
-            const name = document.getElementById("taskName").value.trim();
-            const duration = parseInt(document.getElementById("taskDuration").value);
-            const status = document.getElementById("status");
+async function addTask() {
+  const name = $("#newName").value.trim();
+  const hours = parseInt($("#newH").value || "0", 10);
+  const minutes = parseInt($("#newM").value || "0", 10);
+  const seconds = parseInt($("#newS").value || "0", 10);
+  await api("/add", "POST", { name, hours, minutes, seconds });
+  $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
+  render(); // עדכון מיידי בלי לחכות לפולינג
+}
 
-            if (!name || isNaN(duration)) {
-                status.textContent = "⚠️ יש להזין שם ומשך תקין.";
-                status.style.color = "red";
-                return;
-            }
+async function startTask(id){ await api(`/start/${id}`,"POST"); }
+async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
+async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
+async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
 
-            const res = await fetch("/add", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ name, duration })
-            });
+async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
+async function skipToNext(id){ await api(`/skip/${id}`, "POST"); }
 
-            if (res.ok) {
-                status.textContent = "✅ המשימה נוספה בהצלחה!";
-                status.style.color = "green";
-                document.getElementById("taskName").value = "";
-                document.getElementById("taskDuration").value = "";
-                await loadTasks();
-            } else {
-                status.textContent = "❌ שגיאה בהוספת משימה.";
-                status.style.color = "red";
-            }
-        }
+async function extendTask(id){
+  const row = document.getElementById(`row-${id}`);
+  const h = parseInt(row.querySelector(".ext-h").value || "0",10);
+  const m = parseInt(row.querySelector(".ext-m").value || "0",10);
+  const s = parseInt(row.querySelector(".ext-s").value || "0",10);
+  await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
+}
 
-        async function deleteTask(id) {
-            if (!confirm("למחוק את המשימה הזו?")) return;
-            await fetch(`/delete/${id}`, { method: "DELETE" });
-            await loadTasks();
-        }
+async function saveEdit(id){
+  const row = document.getElementById(`row-${id}`);
+  const nm = row.querySelector(".edit-name").value;
+  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
+  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
+  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
+  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+}
 
-        // טען את המשימות מיד כשנכנסים
-        loadTasks();
-    </script>
+function badgeClass(st){
+  if (st === "running") return "badge running";
+  if (st === "paused")  return "badge paused";
+  if (st === "pending") return "badge pending";
+  return "badge done";
+}
 
+async function render() {
+  const data = await api("/state");
+  $("#overallEnd").textContent = data.overall_end_time || "-";
+  $("#now").textContent = data.now || "";
+
+  const tb = $("#tbody");
+  tb.innerHTML = "";
+  data.tasks.forEach(t => {
+    const tr = document.createElement("tr");
+    tr.id = `row-${t.id}`;
+    tr.className = t.status;
+
+    const canEdit = (t.status !== "running");
+
+    tr.innerHTML = `
+      <td>
+        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
+      </td>
+      <td class="muted">${fmtHHMMSS(t.duration)}</td>
+      <td><strong>${t.remaining_hhmmss}</strong></td>
+      <td>${t.end_time_str || "-"}</td>
+      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
+      <td>
+        <div class="edit-grid">
+          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
+          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
+          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
+          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
+        </div>
+      </td>
+      <td>
+        <div class="extend-grid">
+          <label>שעות <input class="ext-h" type="number" min="0" value="0"></label>
+          <label>דקות <input class="ext-m" type="number" min="0" value="0"></label>
+          <label>שניות <input class="ext-s" type="number" min="0" value="0"></label>
+          <button onclick="extendTask(${t.id})">הארך</button>
+        </div>
+      </td>
+      <td class="actions">
+        <div class="row-actions">
+          <button onclick="startTask(${t.id})">התחל</button>
+          <button onclick="pauseTask(${t.id})">השהה</button>
+          <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="setPending(${t.id})">הפוך ל-pending</button>
+          <button onclick="skipToNext(${t.id})">דלג לבאה</button>
+          <button onclick="deleteTask(${t.id})">מחק</button>
+        </div>
+      </td>
+    `;
+    tb.appendChild(tr);
+  });
+}
+
+// פולינג כל שנייה + הוספה מיידית
+setInterval(render, 1000);
+render();
+document.getElementById("btnAdd").addEventListener("click", async () => { 
+  await addTask(); 
+});
+</script>
 </body>
 </html>
