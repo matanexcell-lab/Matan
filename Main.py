@@ -1,306 +1,129 @@
-import os
-from contextlib import contextmanager
+from flask import Flask, render_template, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import inspect
 from datetime import datetime, timedelta
-
 import pytz
-from flask import Flask, jsonify, render_template, request
-from sqlalchemy import (JSON, Column, DateTime, Integer, String, create_engine,
-                        func)
-from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# ===== Settings =====
-TZ = pytz.timezone("Asia/Jerusalem")
-DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
-DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
-
-# Render/Heroku נותנות URL כמו postgres:// -> צריך להמיר ל-postgresql://
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# ===== SQLAlchemy =====
-engine = create_engine(
-    DATABASE_URL,
-    pool_pre_ping=True,
-    future=True,
-)
-Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
-Base = declarative_base()
-
-@contextmanager
-def session_scope():
-    s = Session()
-    try:
-        yield s
-        s.commit()
-    except Exception:
-        s.rollback()
-        raise
-    finally:
-        s.close()
-
-# ===== Model =====
-class Task(Base):
-    __tablename__ = "tasks"
-    id        = Column(Integer, primary_key=True, autoincrement=True)
-    name      = Column(String, nullable=False)
-    duration  = Column(Integer, nullable=False)   # seconds
-    remaining = Column(Integer, nullable=False)   # seconds (dynamic)
-    status    = Column(String, nullable=False)    # pending|running|paused|done
-    end_time  = Column(DateTime(timezone=True))   # aware
-
-    def to_dict(self):
-        # remaining חי לפי end_time אם רצה
-        rem = self.remaining
-        if self.status == "running" and self.end_time:
-            now_ts = now()
-            sec = int((self.end_time - now_ts).total_seconds())
-            rem = max(0, sec)
-        return {
-            "id": self.id,
-            "name": self.name,
-            "duration": int(self.duration),
-            "remaining": int(rem),
-            "remaining_hhmmss": hhmmss(rem),
-            "status": self.status,
-            "end_time": self.end_time.isoformat() if self.end_time else None,
-            "end_time_str": self.end_time.astimezone(TZ).strftime("%H:%M:%S") if self.end_time else "-",
-        }
-
-Base.metadata.create_all(engine)
-
-# ===== Flask =====
 app = Flask(__name__)
 
-# ===== Time helpers =====
-def now():
-    return datetime.now(TZ)
+# ---- Database ----
+app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://meitar_user:rnw5jOCjnkfts5RBd6ZCYsIle4VkxjvL@dpg-d3aqv7ruibrs73evq640-a/meitar"
+app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+db = SQLAlchemy(app)
 
-def hhmmss(total_seconds):
-    total_seconds = max(0, int(total_seconds or 0))
-    h = total_seconds // 3600
-    m = (total_seconds % 3600) // 60
-    s = total_seconds % 60
-    return f"{h:02d}:{m:02d}:{s:02d}"
 
-# ===== Chain / business logic =====
-def any_running(s):
-    return s.query(Task).filter(Task.status == "running").first() is not None
+# ---- Models ----
+class Task(db.Model):
+    __tablename__ = "tasks"
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100))
+    duration = db.Column(db.Integer)  # minutes
+    remaining = db.Column(db.Integer)
+    status = db.Column(db.String(20), default="pending")
+    start_time = db.Column(db.DateTime, nullable=True)
+    end_time = db.Column(db.DateTime, nullable=True)
+    position = db.Column(db.Integer, default=0)
 
-def any_active(s):
-    return s.query(Task).filter(Task.status.in_(["running", "paused"])).first() is not None
+# ---- Ensure table exists ----
+def ensure_table_exists():
+    try:
+        insp = inspect(db.engine)
+        tables = insp.get_table_names(schema="public") if "public" in insp.get_schema_names() else insp.get_table_names()
+        if "tasks" not in tables:
+            print("📦 Creating 'tasks' table...")
+            with db.engine.begin() as conn:
+                db.metadata.create_all(bind=conn)
+            print("✅ 'tasks' table created successfully!")
+    except Exception as e:
+        print("⚠️ ensure_table_exists error:", e)
 
-def recompute_chain_in_db():
-    """מסיים רצות שעבר זמנן ומפעיל אוטומטית את הבאה (pending)."""
-    with session_scope() as s:
-        tasks = s.query(Task).order_by(Task.id.asc()).all()
-        now_ts = now()
 
-        for idx, t in enumerate(tasks):
-            if t.status == "running" and t.end_time:
-                rem = int((t.end_time - now_ts).total_seconds())
-                if rem <= 0:
-                    # סיים
-                    t.status = "done"
-                    t.remaining = 0
-                    t.end_time = None
-                    s.add(t)
-                    s.flush()
+# ---- Utils ----
+def israel_time():
+    return datetime.now(pytz.timezone("Asia/Jerusalem"))
 
-                    # הפעל את הבאה
-                    if idx + 1 < len(tasks):
-                        nxt = tasks[idx + 1]
-                        if nxt.status == "pending":
-                            nxt.status = "running"
-                            nxt.end_time = now_ts + timedelta(seconds=int(nxt.remaining))
-                            s.add(nxt)
-                else:
-                    # עדכון remaining חי בתור cache
-                    if t.remaining != rem:
-                        t.remaining = rem
-                        s.add(t)
 
-def overall_end_time_calc():
-    with session_scope() as s:
-        tasks = s.query(Task).order_by(Task.id.asc()).all()
-        if not tasks:
-            return None
-        base = now()
-        # אם יש רצה – קח את הסוף שלה
-        for t in tasks:
-            if t.status == "running" and t.end_time and t.end_time > base:
-                base = t.end_time
-        # הוסף Pending/Paused לפי הסדר
-        for t in tasks:
-            if t.status in ("pending", "paused"):
-                base = base + timedelta(seconds=int(max(0, t.remaining)))
-        return base
-
-# ===== Routes =====
+# ---- Routes ----
 @app.route("/")
 def index():
-    return render_template("index.html")
+    ensure_table_exists()
+    tasks = Task.query.order_by(Task.position.asc()).all()
+    return render_template("index.html", tasks=tasks)
+
 
 @app.route("/add", methods=["POST"])
-def add():
-    data = request.json or {}
-    name = (data.get("name") or "").strip() or "משימה"
-    h = int(data.get("hours") or 0)
-    m = int(data.get("minutes") or 0)
-    ssec = int(data.get("seconds") or 0)
-    duration = int(data.get("duration") or (h*3600 + m*60 + ssec))
-    duration = max(0, duration)
+def add_task():
+    data = request.json
+    new_task = Task(
+        name=data["name"],
+        duration=data["duration"],
+        remaining=data["duration"],
+        status="pending",
+        position=Task.query.count(),
+    )
+    db.session.add(new_task)
+    db.session.commit()
+    return jsonify({"message": "Task added!"})
 
-    with session_scope() as s:
-        t = Task(name=name, duration=duration, remaining=duration, status="pending", end_time=None)
-        s.add(t)
-    return jsonify({"ok": True})
 
-@app.route("/start/<int:task_id>", methods=["POST"])
-def start(task_id):
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
+@app.route("/update", methods=["POST"])
+def update_task():
+    data = request.json
+    task = Task.query.get(data["id"])
+    if not task:
+        return jsonify({"error": "Task not found"}), 404
 
-        if t.status in ("pending", "paused") and not any_running(s):
-            t.end_time = now() + timedelta(seconds=int(t.remaining))
-            t.status = "running"
-            s.add(t)
-        elif t.status == "done" and not any_active(s):
-            t.remaining = int(t.duration)
-            t.end_time = now() + timedelta(seconds=int(t.remaining))
-            t.status = "running"
-            s.add(t)
-    return jsonify({"ok": True})
+    for key, value in data.items():
+        if hasattr(task, key):
+            setattr(task, key, value)
+    db.session.commit()
+    return jsonify({"message": "Task updated!"})
 
-@app.route("/pause/<int:task_id>", methods=["POST"])
-def pause(task_id):
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if t and t.status == "running" and t.end_time:
-            rem = int((t.end_time - now()).total_seconds())
-            t.remaining = max(0, rem)
-            t.status = "paused"
-            t.end_time = None
-            s.add(t)
-    return jsonify({"ok": True})
 
-@app.route("/reset/<int:task_id>", methods=["POST"])
-def reset(task_id):
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if t:
-            t.remaining = int(t.duration)
-            t.status = "running"
-            t.end_time = now() + timedelta(seconds=int(t.remaining))
-            s.add(t)
-    return jsonify({"ok": True})
+@app.route("/delete/<int:task_id>", methods=["DELETE"])
+def delete_task(task_id):
+    task = Task.query.get(task_id)
+    if task:
+        db.session.delete(task)
+        db.session.commit()
+    return jsonify({"message": "Task deleted!"})
 
-@app.route("/delete/<int:task_id>", methods=["POST"])
-def delete(task_id):
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if t: s.delete(t)
-    return jsonify({"ok": True})
 
-@app.route("/update/<int:task_id>", methods=["POST"])
-def update(task_id):
-    data = request.json or {}
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
-        if t.status not in ("pending", "paused", "done"):
-            return jsonify({"ok": False, "error": "cannot edit running task"}), 400
+@app.route("/reorder", methods=["POST"])
+def reorder_tasks():
+    data = request.json  # list of task IDs in new order
+    for i, task_id in enumerate(data["order"]):
+        task = Task.query.get(task_id)
+        if task:
+            task.position = i
+    db.session.commit()
+    return jsonify({"message": "Order updated"})
 
-        if "name" in data:
-            nm = (data.get("name") or "").strip()
-            if nm: t.name = nm
-
-        if any(k in data for k in ("hours","minutes","seconds","duration")):
-            h = int(data.get("hours") or 0)
-            m = int(data.get("minutes") or 0)
-            ssec = int(data.get("seconds") or 0)
-            duration = int(data.get("duration") or (h*3600 + m*60 + ssec))
-            duration = max(0, duration)
-            t.duration = duration
-            t.remaining = duration
-            if t.status == "done":
-                t.status = "pending"
-            t.end_time = None
-        s.add(t)
-    return jsonify({"ok": True})
-
-@app.route("/extend/<int:task_id>", methods=["POST"])
-def extend(task_id):
-    data = request.json or {}
-    extra = int(data.get("seconds") or 0)
-    if extra <= 0:
-        return jsonify({"ok": False, "error": "seconds must be > 0"}), 400
-
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
-
-        t.duration = int(t.duration) + extra
-        if t.status == "running" and t.end_time:
-            rem = max(0, int((t.end_time - now()).total_seconds()))
-            t.remaining = rem + extra
-            t.end_time = t.end_time + timedelta(seconds=extra)
-        else:
-            t.remaining = int(t.remaining) + extra
-        s.add(t)
-    return jsonify({"ok": True})
-
-@app.route("/skip/<int:task_id>", methods=["POST"])
-def skip(task_id):
-    with session_scope() as s:
-        tasks = s.query(Task).order_by(Task.id.asc()).all()
-        ids = [t.id for t in tasks]
-        t = s.get(Task, task_id)
-        if t and t.status == "running":
-            t.status = "done"
-            t.remaining = 0
-            t.end_time = None
-            s.add(t)
-            # הבא בתור
-            if task_id in ids:
-                idx = ids.index(task_id)
-                if idx + 1 < len(tasks):
-                    nxt = tasks[idx+1]
-                    if nxt.status == "pending":
-                        nxt.status = "running"
-                        nxt.end_time = now() + timedelta(seconds=int(nxt.remaining))
-                        s.add(nxt)
-    return jsonify({"ok": True})
-
-@app.route("/set_pending/<int:task_id>", methods=["POST"])
-def set_pending(task_id):
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if t and t.status in ("paused","done","pending"):
-            if t.status == "done":
-                t.remaining = int(t.duration)
-            t.status = "pending"
-            t.end_time = None
-            s.add(t)
-    return jsonify({"ok": True})
 
 @app.route("/state")
 def state():
-    recompute_chain_in_db()
-    with session_scope() as s:
-        tasks = s.query(Task).order_by(Task.id.asc()).all()
-        payload = [t.to_dict() for t in tasks]
+    ensure_table_exists()
+    tasks = Task.query.order_by(Task.position.asc()).all()
+    out = []
+    now = israel_time()
+    for t in tasks:
+        if t.start_time and t.end_time:
+            remaining = max(0, (t.end_time - now).total_seconds() / 60)
+        else:
+            remaining = t.remaining
+        out.append({
+            "id": t.id,
+            "name": t.name,
+            "duration": t.duration,
+            "remaining": round(remaining, 2),
+            "status": t.status,
+            "start_time": t.start_time.isoformat() if t.start_time else None,
+            "end_time": t.end_time.isoformat() if t.end_time else None,
+            "position": t.position
+        })
+    return jsonify(out)
 
-    end_all = overall_end_time_calc()
-    end_all_str = end_all.astimezone(TZ).strftime("%H:%M:%S %d.%m.%Y") if end_all else "-"
-
-    return jsonify({
-        "ok": True,
-        "tasks": payload,
-        "overall_end_time": end_all_str,
-        "now": now().strftime("%H:%M:%S %d.%m.%Y")
-    })
 
 if __name__ == "__main__":
-    # מקומי
-    app.run(host="0.0.0.0", port=5000)
+    ensure_table_exists()
+    app.run(host="0.0.0.0", port=10000)
