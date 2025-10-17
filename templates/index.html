@@ -18,11 +18,13 @@
     .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
     .actions button { margin: 0 2px; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
-    .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+    .edit-grid, .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .toolbar { text-align:center; margin-bottom:12px }
     button { cursor:pointer; }
+    .drag-handle { cursor: grab; font-size:18px; color:#888; padding:0 6px; }
+    tr.sortable-chosen { background:#e0f7ff !important; }
   </style>
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 </head>
 <body>
 
@@ -47,6 +49,7 @@
 <table>
   <thead>
   <tr>
+    <th>גרירה</th>
     <th>שם</th>
     <th>זמן התחלתי</th>
     <th>זמן נותר</th>
@@ -64,6 +67,7 @@
 const $ = (sel) => document.querySelector(sel);
 let isEditing = false;
 let autoSaveTimeout = null;
+let sortable = null;
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -124,7 +128,7 @@ async function autoSave(id){
     } catch(e) {
       console.warn("שגיאה בשמירה אוטומטית:", e.message);
     }
-  }, 1200); // שמירה אחרי 1.2 שניות חוסר פעילות
+  }, 1200);
 }
 
 function badgeClass(st){
@@ -148,6 +152,7 @@ async function render() {
     tr.className = t.status;
 
     tr.innerHTML = `
+      <td><span class="drag-handle">☰</span></td>
       <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" oninput="autoSave(${t.id})"></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
@@ -173,7 +178,7 @@ async function render() {
           <button onclick="startTask(${t.id})">התחל</button>
           <button onclick="pauseTask(${t.id})">השהה</button>
           <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="setPending(${t.id})">הפוך ל-pending</button>
+          <button onclick="setPending(${t.id})">ל-Pending</button>
           <button onclick="skipToNext(${t.id})">דלג לבאה</button>
           <button onclick="deleteTask(${t.id})">מחק</button>
         </div>
@@ -186,6 +191,24 @@ async function render() {
   document.querySelectorAll("input").forEach(inp => {
     inp.addEventListener("focus", ()=>{ isEditing = true; });
     inp.addEventListener("blur", ()=>{ isEditing = false; });
+  });
+
+  enableDrag();
+}
+
+// --- גרירה לשינוי סדר משימות ---
+function enableDrag() {
+  const tbody = document.getElementById("tbody");
+  if (sortable) sortable.destroy();
+
+  sortable = new Sortable(tbody, {
+    animation: 150,
+    handle: ".drag-handle",
+    onEnd: async () => {
+      const order = Array.from(tbody.children).map(tr => parseInt(tr.id.replace("row-","")));
+      await api("/reorder", "POST", { order });
+      render();
+    }
   });
 }
 
