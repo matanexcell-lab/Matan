@@ -1,9 +1,7 @@
-
-#main
+# Main.py
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-
 import pytz
 from flask import Flask, jsonify, render_template, request
 from sqlalchemy import Column, DateTime, Integer, String, create_engine
@@ -86,11 +84,10 @@ def any_active(s):
     return s.query(Task).filter(Task.status.in_(["running", "paused"])).first() is not None
 
 def recompute_chain_in_db():
-    """סוגר רצות שנגמרו ומפעיל אוטומטית את הבאה בתור."""
+    """עדכון רצף משימות — כאשר אחת מסתיימת, הבאה מתחילה אוטומטית."""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.id.asc()).all()
         now_ts = now()
-
         for idx, t in enumerate(tasks):
             if t.status == "running" and t.end_time:
                 rem = int((t.end_time - now_ts).total_seconds())
@@ -164,12 +161,10 @@ def start(task_id):
     with session_scope() as s:
         t = s.get(Task, task_id)
         if not t: return jsonify({"ok": False, "error": "not found"}), 404
-        # מותר להתחיל רק אם אף משימה לא רצה כרגע
         if t.status in ("pending", "paused") and not any_running(s):
             t.end_time = now() + timedelta(seconds=int(t.remaining))
             t.status = "running"
             s.add(t)
-        # להפעיל שוב DONE רק אם אין פעילה אחרת
         elif t.status == "done" and not any_active(s):
             t.remaining = int(t.duration)
             t.end_time = now() + timedelta(seconds=int(t.remaining))
@@ -213,57 +208,50 @@ def update(task_id):
     data = request.json or {}
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
-        if t.status not in ("pending", "paused", "done"):
+        if not t:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        if t.status == "running":
             return jsonify({"ok": False, "error": "cannot edit running task"}), 400
 
         if "name" in data:
             nm = (data.get("name") or "").strip()
-            if nm: t.name = nm
+            if nm:
+                t.name = nm
 
-        if any(k in data for k in ("hours","minutes","seconds","duration")):
-            h = int(data.get("hours") or 0)
-            m = int(data.get("minutes") or 0)
-            ssec = int(data.get("seconds") or 0)
-            duration = int(data.get("duration") or (h*3600 + m*60 + ssec))
-            duration = max(0, duration)
-            t.duration = duration
-            t.remaining = duration
+        h = int(data.get("hours") or 0)
+        m = int(data.get("minutes") or 0)
+        ssec = int(data.get("seconds") or 0)
+        if h or m or ssec:
+            new_duration = h * 3600 + m * 60 + ssec
+            t.duration = new_duration
+            t.remaining = new_duration
+            t.end_time = None
             if t.status == "done":
                 t.status = "pending"
-            t.end_time = None
         s.add(t)
     return jsonify({"ok": True})
 
 @app.route("/extend/<int:task_id>", methods=["POST"])
 def extend(task_id):
-    """הארכת משימה בזמן חופשי (שעות/דקות/שניות)."""
     data = request.json or {}
-    extra = 0
-    if "seconds" in data or "minutes" in data or "hours" in data:
-        extra = int(data.get("hours", 0))*3600 + int(data.get("minutes", 0))*60 + int(data.get("seconds", 0))
-    else:
-        extra = int(data.get("extra_seconds") or 0)
+    extra = int(data.get("hours", 0))*3600 + int(data.get("minutes", 0))*60 + int(data.get("seconds", 0))
     if extra <= 0:
         return jsonify({"ok": False, "error": "extra must be > 0"}), 400
-
     with session_scope() as s:
         t = s.get(Task, task_id)
         if not t: return jsonify({"ok": False, "error": "not found"}), 404
-
-        t.duration = int(t.duration) + extra
+        t.duration += extra
         if t.status == "running" and t.end_time:
             rem = max(0, int((t.end_time - now()).total_seconds()))
             t.remaining = rem + extra
             t.end_time = t.end_time + timedelta(seconds=extra)
         else:
-            t.remaining = int(t.remaining) + extra
+            t.remaining += extra
         s.add(t)
     return jsonify({"ok": True})
 
 @app.route("/skip/<int:task_id>", methods=["POST"])
 def skip(task_id):
-    """דלג לבאה: מסמן רצה כ-done ומפעיל את הבאה מיידית."""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.id.asc()).all()
         ids = [t.id for t in tasks]
@@ -285,7 +273,6 @@ def skip(task_id):
 
 @app.route("/set_pending/<int:task_id>", methods=["POST"])
 def set_pending(task_id):
-    """הפיכת משימה ל-pending (כולל DONE חוזר לפנדינג עם remaining=duration)."""
     with session_scope() as s:
         t = s.get(Task, task_id)
         if t and t.status in ("paused","done","pending"):
