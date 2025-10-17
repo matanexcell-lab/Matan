@@ -32,13 +32,13 @@ def session_scope():
 # ===== Model =====
 class Task(Base):
     __tablename__ = "tasks"
-    id        = Column(Integer, primary_key=True, autoincrement=True)
-    name      = Column(String, nullable=False)
-    duration  = Column(Integer, nullable=False)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, nullable=False)
+    duration = Column(Integer, nullable=False)
     remaining = Column(Integer, nullable=False)
-    status    = Column(String, nullable=False)
-    end_time  = Column(DateTime(timezone=True))
-    position  = Column(Integer, nullable=False, default=0)
+    status = Column(String, nullable=False)
+    end_time = Column(DateTime(timezone=True))
+    position = Column(Integer, nullable=False, default=0)
 
     def to_dict(self):
         rem = self.remaining
@@ -70,7 +70,7 @@ with engine.connect() as conn:
 # ===== Flask =====
 app = Flask(__name__)
 
-# ===== Time helpers =====
+# ===== Helpers =====
 def now():
     return datetime.now(TZ)
 
@@ -81,7 +81,6 @@ def hhmmss(total_seconds):
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# ===== Chain logic =====
 def any_running(s):
     return s.query(Task).filter(Task.status == "running").first() is not None
 
@@ -107,9 +106,8 @@ def recompute_chain_in_db():
                             nxt.end_time = now_ts + timedelta(seconds=int(nxt.remaining))
                             s.add(nxt)
                 else:
-                    if t.remaining != rem:
-                        t.remaining = rem
-                        s.add(t)
+                    t.remaining = rem
+                    s.add(t)
 
 def overall_end_time_calc():
     with session_scope() as s:
@@ -164,7 +162,7 @@ def add():
 def start(task_id):
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
+        if not t: return jsonify({"ok": False}), 404
         if t.status in ("pending", "paused") and not any_running(s):
             t.end_time = now() + timedelta(seconds=int(t.remaining))
             t.status = "running"
@@ -210,7 +208,7 @@ def update(task_id):
     data = request.json or {}
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
+        if not t: return jsonify({"ok": False}), 404
         if "name" in data:
             nm = (data.get("name") or "").strip()
             if nm: t.name = nm
@@ -219,7 +217,6 @@ def update(task_id):
             m = int(data.get("minutes") or 0)
             ssec = int(data.get("seconds") or 0)
             duration = int(data.get("duration") or (h*3600 + m*60 + ssec))
-            duration = max(0, duration)
             t.duration = duration
             t.remaining = duration
             t.end_time = None
@@ -240,30 +237,22 @@ def extend(task_id):
         s.add(t)
     return jsonify({"ok": True})
 
-# ✅ שינוי סדר משימה בודדת (הפיצ’ר החדש)
 @app.route("/reorder_single", methods=["POST"])
 def reorder_single():
     data = request.json or {}
-    task_id = data.get("task_id")
-    new_position = int(data.get("new_position", 0))
-
-    if not task_id:
-        return jsonify({"ok": False, "error": "no task_id provided"}), 400
-
+    task_id = int(data.get("task_id", 0))
+    new_position = int(data.get("new_position", 0)) - 1
     with session_scope() as s:
-        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        tasks = s.query(Task).order_by(Task.position.asc()).all()
         ids = [t.id for t in tasks]
         if task_id not in ids:
-            return jsonify({"ok": False, "error": "task not found"}), 404
-
+            return jsonify({"ok": False, "error": "not found"}), 404
         old_index = ids.index(task_id)
-        new_index = max(0, min(new_position - 1, len(ids) - 1))
-        ids.insert(new_index, ids.pop(old_index))
+        ids.insert(new_position, ids.pop(old_index))
         for idx, tid in enumerate(ids):
             t = s.get(Task, tid)
-            if t:
-                t.position = idx
-                s.add(t)
+            t.position = idx
+            s.add(t)
     return jsonify({"ok": True})
 
 
