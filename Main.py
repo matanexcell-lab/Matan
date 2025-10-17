@@ -42,7 +42,7 @@ class Task(Base):
     remaining = Column(Integer, nullable=False)
     status    = Column(String, nullable=False)
     end_time  = Column(DateTime(timezone=True))
-    position  = Column(Integer, nullable=False, default=0)  # סדר המשימה
+    position  = Column(Integer, nullable=False, default=0)
 
     def to_dict(self):
         rem = self.remaining
@@ -63,13 +63,13 @@ class Task(Base):
 
 Base.metadata.create_all(engine)
 
-# אם חסרה עמודת position — נוסיף אותה
+# אם חסרה עמודת position נוסיף אותה
 with engine.connect() as conn:
     try:
         conn.execute(text("ALTER TABLE tasks ADD COLUMN position INTEGER DEFAULT 0"))
         conn.commit()
     except Exception:
-        pass  # כבר קיימת
+        pass
 
 
 # ===== פונקציות עזר =====
@@ -101,6 +101,7 @@ def recompute_chain_in_db():
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
+                    # מפעיל את הבאה
                     if idx + 1 < len(tasks):
                         nxt = tasks[idx + 1]
                         if nxt.status == "pending":
@@ -108,9 +109,8 @@ def recompute_chain_in_db():
                             nxt.end_time = now_ts + timedelta(seconds=int(nxt.remaining))
                             s.add(nxt)
                 else:
-                    if t.remaining != rem:
-                        t.remaining = rem
-                        s.add(t)
+                    t.remaining = rem
+                    s.add(t)
 
 def overall_end_time_calc():
     with session_scope() as s:
@@ -151,7 +151,6 @@ def state():
 
 
 # ===== ראוטים לניהול משימות =====
-
 @app.route("/add", methods=["POST"])
 def add():
     data = request.json or {}
@@ -175,7 +174,7 @@ def start(task_id):
             t.status = "running"
             s.add(t)
         elif t and t.status == "done" and not any_active(s):
-            t.remaining = int(t.duration)
+            t.remaining = t.duration
             t.end_time = now() + timedelta(seconds=int(t.remaining))
             t.status = "running"
             s.add(t)
@@ -198,7 +197,7 @@ def reset(task_id):
     with session_scope() as s:
         t = s.get(Task, task_id)
         if t:
-            t.remaining = int(t.duration)
+            t.remaining = t.duration
             t.status = "running"
             t.end_time = now() + timedelta(seconds=int(t.remaining))
             s.add(t)
@@ -208,7 +207,8 @@ def reset(task_id):
 def delete(task_id):
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if t: s.delete(t)
+        if t:
+            s.delete(t)
     return jsonify({"ok": True})
 
 @app.route("/update/<int:task_id>", methods=["POST"])
@@ -216,11 +216,13 @@ def update(task_id):
     data = request.json or {}
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False, "error": "not found"}), 404
+        if not t:
+            return jsonify({"ok": False, "error": "not found"}), 404
         if "name" in data:
             nm = (data.get("name") or "").strip()
-            if nm: t.name = nm
-        if any(k in data for k in ("hours","minutes","seconds","duration")):
+            if nm:
+                t.name = nm
+        if any(k in data for k in ("hours", "minutes", "seconds", "duration")):
             h = int(data.get("hours") or 0)
             m = int(data.get("minutes") or 0)
             ssec = int(data.get("seconds") or 0)
@@ -234,10 +236,11 @@ def update(task_id):
 @app.route("/extend/<int:task_id>", methods=["POST"])
 def extend(task_id):
     data = request.json or {}
-    extra = int(data.get("hours",0))*3600 + int(data.get("minutes",0))*60 + int(data.get("seconds",0))
+    extra = int(data.get("hours", 0))*3600 + int(data.get("minutes", 0))*60 + int(data.get("seconds", 0))
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if not t: return jsonify({"ok": False}), 404
+        if not t:
+            return jsonify({"ok": False}), 404
         t.duration += extra
         t.remaining += extra
         if t.status == "running" and t.end_time:
@@ -245,45 +248,36 @@ def extend(task_id):
         s.add(t)
     return jsonify({"ok": True})
 
-# שינוי מיקום משימה בודדת או רשימה שלמה
-@app.route("/reorder", methods=["POST"])
-def reorder():
+
+# 🧩 שינוי סדר משימה בודדת (כמו שעבד קודם)
+@app.route("/reorder_single", methods=["POST"])
+def reorder_single():
     data = request.json or {}
+    task_id = data.get("task_id")
+    new_position = int(data.get("new_position", 0))
 
-    # רשימה מלאה (קיים כבר)
-    if "order" in data:
-        order = data.get("order", [])
-        if not order:
-            return jsonify({"ok": False, "error": "no order provided"}), 400
-        with session_scope() as s:
-            for idx, task_id in enumerate(order):
-                t = s.get(Task, task_id)
-                if t:
-                    t.position = idx
-                    s.add(t)
-        return jsonify({"ok": True})
+    if not task_id:
+        return jsonify({"ok": False, "error": "no task_id provided"}), 400
 
-    # שינוי מיקום של משימה אחת בלבד
-    elif "task_id" in data and "new_position" in data:
-        task_id = data.get("task_id")
-        new_position = int(data.get("new_position", 0))
-        with session_scope() as s:
-            tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
-            ids = [t.id for t in tasks]
-            if task_id not in ids:
-                return jsonify({"ok": False, "error": "task not found"}), 404
-            old_index = ids.index(task_id)
-            new_index = max(0, min(new_position - 1, len(ids) - 1))
-            ids.insert(new_index, ids.pop(old_index))
-            for idx, tid in enumerate(ids):
-                t = s.get(Task, tid)
-                if t:
-                    t.position = idx
-                    s.add(t)
-        return jsonify({"ok": True})
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        ids = [t.id for t in tasks]
 
-    else:
-        return jsonify({"ok": False, "error": "invalid format"}), 400
+        if task_id not in ids:
+            return jsonify({"ok": False, "error": "task not found"}), 404
+
+        old_index = ids.index(task_id)
+        new_index = max(0, min(new_position - 1, len(ids) - 1))
+
+        ids.insert(new_index, ids.pop(old_index))
+
+        for idx, tid in enumerate(ids):
+            t = s.get(Task, tid)
+            if t:
+                t.position = idx
+                s.add(t)
+
+    return jsonify({"ok": True})
 
 
 if __name__ == "__main__":
