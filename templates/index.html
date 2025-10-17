@@ -1,14 +1,14 @@
 זה אינדקס אחרון
 
-<!doctype html>
+ <!doctype html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8"/>
   <title>טיימר משימות</title>
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; margin-top:10px; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
     input[type="number"] { width: 60px; }
     input[type="text"] { width: 160px; }
@@ -23,6 +23,7 @@
     .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .toolbar { text-align:center; margin-bottom:12px }
+    button { cursor:pointer; }
   </style>
 </head>
 <body>
@@ -54,8 +55,9 @@
     <th>שעת סיום</th>
     <th>סטטוס</th>
     <th>עריכה (כשלא פעילה)</th>
-    <th>הארכה חופשית</th>
+    <th>הארכה</th>
     <th>פעולות</th>
+    <th>מיקום</th>
   </tr>
   </thead>
   <tbody id="tbody"></tbody>
@@ -91,17 +93,15 @@ async function addTask() {
   const seconds = parseInt($("#newS").value || "0", 10);
   await api("/add", "POST", { name, hours, minutes, seconds });
   $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  render(); // עדכון מיידי בלי לחכות לפולינג
+  render();
 }
 
 async function startTask(id){ await api(`/start/${id}`,"POST"); }
 async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
 async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
-
 async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
 async function skipToNext(id){ await api(`/skip/${id}`, "POST"); }
-
 async function extendTask(id){
   const row = document.getElementById(`row-${id}`);
   const h = parseInt(row.querySelector(".ext-h").value || "0",10);
@@ -109,7 +109,6 @@ async function extendTask(id){
   const s = parseInt(row.querySelector(".ext-s").value || "0",10);
   await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
 }
-
 async function saveEdit(id){
   const row = document.getElementById(`row-${id}`);
   const nm = row.querySelector(".edit-name").value;
@@ -117,6 +116,13 @@ async function saveEdit(id){
   const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
   const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
   await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+}
+
+async function moveTask(id){
+  const row = document.getElementById(`row-${id}`);
+  const newPos = parseInt(row.querySelector(".move-pos").value || "1",10);
+  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  render();
 }
 
 function badgeClass(st){
@@ -133,17 +139,14 @@ async function render() {
 
   const tb = $("#tbody");
   tb.innerHTML = "";
-  data.tasks.forEach(t => {
+  data.tasks.forEach((t, idx) => {
     const tr = document.createElement("tr");
     tr.id = `row-${t.id}`;
     tr.className = t.status;
-
     const canEdit = (t.status !== "running");
 
     tr.innerHTML = `
-      <td>
-        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
-      </td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
       <td>${t.end_time_str || "-"}</td>
@@ -169,22 +172,23 @@ async function render() {
           <button onclick="startTask(${t.id})">התחל</button>
           <button onclick="pauseTask(${t.id})">השהה</button>
           <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="setPending(${t.id})">הפוך ל-pending</button>
+          <button onclick="setPending(${t.id})">ל-pending</button>
           <button onclick="skipToNext(${t.id})">דלג לבאה</button>
           <button onclick="deleteTask(${t.id})">מחק</button>
         </div>
+      </td>
+      <td>
+        <input type="number" class="move-pos" min="1" value="${t.position+1}" style="width:50px">
+        <button onclick="moveTask(${t.id})">העבר</button>
       </td>
     `;
     tb.appendChild(tr);
   });
 }
 
-// פולינג כל שנייה + הוספה מיידית
 setInterval(render, 1000);
 render();
-document.getElementById("btnAdd").addEventListener("click", async () => { 
-  await addTask(); 
-});
+$("#btnAdd").addEventListener("click", addTask);
 </script>
 </body>
-</html>
+</html> 
