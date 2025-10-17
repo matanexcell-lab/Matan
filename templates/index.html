@@ -53,7 +53,7 @@
     <th>שעת סיום</th>
     <th>סטטוס</th>
     <th>עריכה</th>
-    <th>הארכה חופשית</th>
+    <th>הארכה</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -62,7 +62,8 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
-let isEditing = false; // מצב שמונע רענון בזמן עריכה
+let isEditing = false;
+let autoSaveTimeout = null;
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -110,18 +111,20 @@ async function extendTask(id){
   render();
 }
 
-async function saveEdit(id){
-  const row = document.getElementById(`row-${id}`);
-  const nm = row.querySelector(".edit-name").value.trim();
-  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
-  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
-  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-  try {
-    await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
-    render();
-  } catch (e) {
-    alert("שגיאה בעדכון המשימה: " + e.message);
-  }
+async function autoSave(id){
+  if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
+  autoSaveTimeout = setTimeout(async ()=>{
+    const row = document.getElementById(`row-${id}`);
+    const nm = row.querySelector(".edit-name").value.trim();
+    const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
+    const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
+    const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
+    try {
+      await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+    } catch(e) {
+      console.warn("שגיאה בשמירה אוטומטית:", e.message);
+    }
+  }, 1200); // שמירה אחרי 1.2 שניות חוסר פעילות
 }
 
 function badgeClass(st){
@@ -132,7 +135,7 @@ function badgeClass(st){
 }
 
 async function render() {
-  if (isEditing) return; // לא נרנדר בזמן כתיבה
+  if (isEditing) return;
   const data = await api("/state");
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
@@ -145,17 +148,16 @@ async function render() {
     tr.className = t.status;
 
     tr.innerHTML = `
-      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}"></td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" oninput="autoSave(${t.id})"></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
       <td>${t.end_time_str || "-"}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}"></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}"></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}"></label>
-          <button onclick="saveEdit(${t.id})">עדכן</button>
+          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" oninput="autoSave(${t.id})"></label>
+          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" oninput="autoSave(${t.id})"></label>
+          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" oninput="autoSave(${t.id})"></label>
         </div>
       </td>
       <td>
@@ -180,14 +182,13 @@ async function render() {
     tb.appendChild(tr);
   });
 
-  // אם אתה לוחץ על שדה, לא נרנדר שוב
+  // מניעת רענון בזמן עריכה
   document.querySelectorAll("input").forEach(inp => {
     inp.addEventListener("focus", ()=>{ isEditing = true; });
     inp.addEventListener("blur", ()=>{ isEditing = false; });
   });
 }
 
-// רענון רק כשלא עורכים
 setInterval(() => { if (!isEditing) render(); }, 1000);
 render();
 document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
