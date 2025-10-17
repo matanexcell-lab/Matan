@@ -1,5 +1,6 @@
 Flask
 gunicorn
-sqlalchemy
+Flask-SQLAlchemy
+SQLAlchemy
 psycopg2-binary
 pytz
