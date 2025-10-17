@@ -21,10 +21,9 @@
     .edit-grid, .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .toolbar { text-align:center; margin-bottom:12px }
     button { cursor:pointer; }
-    .drag-handle { cursor: grab; font-size:18px; color:#888; padding:0 6px; }
-    tr.sortable-chosen { background:#e0f7ff !important; }
+    .reorder-num { width: 45px; text-align: center; }
+    .reorder-mode td { background:#f4faff; }
   </style>
-  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 </head>
 <body>
 
@@ -32,7 +31,9 @@
 
 <div class="toolbar">
   <span id="now" class="muted"></span><br/>
-  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span>
+  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span><br/><br/>
+  <button id="btnReorderToggle">🧩 סדר מחדש</button>
+  <button id="btnReorderSave" style="display:none;">💾 שמור סדר חדש</button>
 </div>
 
 <!-- הוספת משימה -->
@@ -49,7 +50,7 @@
 <table>
   <thead>
   <tr>
-    <th>גרירה</th>
+    <th>#</th>
     <th>שם</th>
     <th>זמן התחלתי</th>
     <th>זמן נותר</th>
@@ -67,7 +68,8 @@
 const $ = (sel) => document.querySelector(sel);
 let isEditing = false;
 let autoSaveTimeout = null;
-let sortable = null;
+let reorderMode = false;
+let currentTasks = [];
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -81,11 +83,7 @@ async function api(url, method="GET", body=null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body) opt.body = JSON.stringify(body);
   const res = await fetch(url, opt);
-  if (!res.ok) {
-    let msg;
-    try { msg = (await res.json()).error || res.statusText; } catch(e) { msg = res.statusText; }
-    throw new Error(msg);
-  }
+  if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
@@ -141,78 +139,78 @@ function badgeClass(st){
 async function render() {
   if (isEditing) return;
   const data = await api("/state");
+  currentTasks = data.tasks;
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
 
   const tb = $("#tbody");
   tb.innerHTML = "";
-  data.tasks.forEach(t => {
+  data.tasks.forEach((t, idx) => {
     const tr = document.createElement("tr");
     tr.id = `row-${t.id}`;
-    tr.className = t.status;
+    tr.className = t.status + (reorderMode ? " reorder-mode" : "");
 
     tr.innerHTML = `
-      <td><span class="drag-handle">☰</span></td>
-      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" oninput="autoSave(${t.id})"></td>
+      <td>${reorderMode ? `<input class='reorder-num' type='number' min='1' value='${idx+1}' data-id='${t.id}'>` : (idx+1)}</td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" oninput="autoSave(${t.id})" ${reorderMode ? "disabled" : ""}></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
       <td>${t.end_time_str || "-"}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" oninput="autoSave(${t.id})"></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" oninput="autoSave(${t.id})"></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" oninput="autoSave(${t.id})"></label>
+          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${reorderMode ? "disabled" : ""} oninput="autoSave(${t.id})"></label>
+          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${reorderMode ? "disabled" : ""} oninput="autoSave(${t.id})"></label>
+          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${reorderMode ? "disabled" : ""} oninput="autoSave(${t.id})"></label>
         </div>
       </td>
       <td>
         <div class="extend-grid">
-          <label>שעות <input class="ext-h" type="number" min="0" value="0"></label>
-          <label>דקות <input class="ext-m" type="number" min="0" value="0"></label>
-          <label>שניות <input class="ext-s" type="number" min="0" value="0"></label>
-          <button onclick="extendTask(${t.id})">הארך</button>
+          <label>שעות <input class="ext-h" type="number" min="0" value="0" ${reorderMode ? "disabled" : ""}></label>
+          <label>דקות <input class="ext-m" type="number" min="0" value="0" ${reorderMode ? "disabled" : ""}></label>
+          <label>שניות <input class="ext-s" type="number" min="0" value="0" ${reorderMode ? "disabled" : ""}></label>
+          <button onclick="extendTask(${t.id})" ${reorderMode ? "disabled" : ""}>הארך</button>
         </div>
       </td>
       <td class="actions">
         <div class="row-actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="setPending(${t.id})">ל-Pending</button>
-          <button onclick="skipToNext(${t.id})">דלג לבאה</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
+          <button onclick="startTask(${t.id})" ${reorderMode ? "disabled" : ""}>התחל</button>
+          <button onclick="pauseTask(${t.id})" ${reorderMode ? "disabled" : ""}>השהה</button>
+          <button onclick="resetTask(${t.id})" ${reorderMode ? "disabled" : ""}>איפוס</button>
+          <button onclick="setPending(${t.id})" ${reorderMode ? "disabled" : ""}>ל-Pending</button>
+          <button onclick="skipToNext(${t.id})" ${reorderMode ? "disabled" : ""}>דלג לבאה</button>
+          <button onclick="deleteTask(${t.id})" ${reorderMode ? "disabled" : ""}>מחק</button>
         </div>
       </td>
     `;
     tb.appendChild(tr);
   });
 
-  // מניעת רענון בזמן עריכה
   document.querySelectorAll("input").forEach(inp => {
     inp.addEventListener("focus", ()=>{ isEditing = true; });
     inp.addEventListener("blur", ()=>{ isEditing = false; });
   });
-
-  enableDrag();
 }
 
-// --- גרירה לשינוי סדר משימות ---
-function enableDrag() {
-  const tbody = document.getElementById("tbody");
-  if (sortable) sortable.destroy();
+$("#btnReorderToggle").addEventListener("click", ()=>{
+  reorderMode = !reorderMode;
+  $("#btnReorderSave").style.display = reorderMode ? "inline-block" : "none";
+  $("#btnReorderToggle").textContent = reorderMode ? "❌ ביטול סדר מחדש" : "🧩 סדר מחדש";
+  render();
+});
 
-  sortable = new Sortable(tbody, {
-    animation: 150,
-    handle: ".drag-handle",
-    onEnd: async () => {
-      const order = Array.from(tbody.children).map(tr => parseInt(tr.id.replace("row-","")));
-      await api("/reorder", "POST", { order });
-      render();
-    }
-  });
-}
+$("#btnReorderSave").addEventListener("click", async ()=>{
+  const nums = Array.from(document.querySelectorAll(".reorder-num"));
+  nums.sort((a,b)=> parseInt(a.value)-parseInt(b.value));
+  const order = nums.map(x=> parseInt(x.dataset.id));
+  await api("/reorder", "POST", { order });
+  reorderMode = false;
+  $("#btnReorderSave").style.display = "none";
+  $("#btnReorderToggle").textContent = "🧩 סדר מחדש";
+  render();
+});
 
-setInterval(() => { if (!isEditing) render(); }, 1000);
+setInterval(() => { if (!isEditing && !reorderMode) render(); }, 1000);
 render();
 document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
 </script>
