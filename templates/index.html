@@ -1,152 +1,104 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="he" dir="rtl">
 <head>
-<meta charset="utf-8">
-<title>מנהל משימות מלא</title>
-<style>
-body { font-family: Arial, sans-serif; direction: rtl; padding: 10px; }
-h2 { text-align: center; }
-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-th, td { border: 1px solid #999; padding: 6px; text-align: center; }
-tr.dragging { opacity: 0.4; background: #ffffcc; }
-button { margin: 2px; }
-.running { background-color: #d6f5d6; }
-.paused { background-color: #fff0b3; }
-.pending { background-color: #eee; }
-.done { background-color: #ccc; text-decoration: line-through; }
-</style>
+    <meta charset="UTF-8">
+    <title>מנהל משימות בזמן אמת</title>
+    <style>
+        body { font-family: "Assistant", sans-serif; text-align: center; direction: rtl; }
+        .task { border: 1px solid #ccc; margin: 8px; padding: 8px; border-radius: 10px; cursor: grab; }
+        .running { background: #d4f8d4; }
+        .paused { background: #ffe9b3; }
+        .pending { background: #eaeaea; }
+        input, button { margin: 4px; }
+        #tasks { max-width: 500px; margin: auto; }
+    </style>
 </head>
 <body>
-<h2>🕒 טיימר משימות</h2>
-
+<h2>מנהל משימות בזמן אמת</h2>
 <div>
-  <strong id="overall"></strong>
+    <input id="name" placeholder="שם המשימה">
+    <input id="duration" type="number" placeholder="משך (בדקות)">
+    <button onclick="addTask()">➕ הוסף משימה</button>
 </div>
-
-<div>
-  <input id="newName" placeholder="שם משימה">
-  <input id="newH" type="number" min="0" placeholder="שעות" style="width:60px">
-  <input id="newM" type="number" min="0" placeholder="דקות" style="width:60px">
-  <input id="newS" type="number" min="0" placeholder="שניות" style="width:60px">
-  <button id="btnAdd">➕ הוסף משימה</button>
-</div>
-
-<table>
-<thead>
-<tr>
-  <th>שם</th><th>זמן כולל</th><th>נותר</th><th>שעת סיום</th><th>סטטוס</th><th>פעולות</th>
-</tr>
-</thead>
-<tbody id="tbody"></tbody>
-</table>
+<div id="tasks"></div>
 
 <script>
-async function api(url, method="GET", body=null){
-  const opt={method,headers:{'Content-Type':'application/json'}};
-  if(body) opt.body=JSON.stringify(body);
-  const res=await fetch(url,opt);
-  return res.json();
-}
-
-async function render(){
-  const data=await api("/state");
-  document.getElementById("overall").innerText=
-    `שעת סיום כוללת: ${data.overall_end_time} | עכשיו: ${data.now}`;
-  const tb=document.getElementById("tbody");
-  tb.innerHTML="";
-  data.tasks.forEach(t=>{
-    const tr=document.createElement("tr");
-    tr.draggable=true;
-    tr.dataset.id=t.id;
-    tr.className=t.status;
-    tr.innerHTML=`
-      <td contenteditable="true" onblur="updateName(${t.id}, this.innerText)">${t.name}</td>
-      <td>${t.duration}s</td>
-      <td>${t.remaining_hhmmss}</td>
-      <td>${t.end_time_str}</td>
-      <td>${t.status}</td>
-      <td>
-        <button onclick="start(${t.id})">▶️</button>
-        <button onclick="pause(${t.id})">⏸️</button>
-        <button onclick="extend(${t.id})">+5 דק'</button>
-        <button onclick="del(${t.id})">🗑️</button>
-      </td>`;
-    tb.appendChild(tr);
-  });
-  enableDrag();
-}
-
-// === כאן השינוי הקריטי ===
-async function addTask(){
-  const name=document.getElementById("newName").value.trim();
-  const h=document.getElementById("newH").value||0;
-  const m=document.getElementById("newM").value||0;
-  const s=document.getElementById("newS").value||0;
-
-  try {
-    const res=await fetch("/add",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({name,hours:h,minutes:m,seconds:s})
+async function loadTasks() {
+    const res = await fetch('/state');
+    const tasks = await res.json();
+    const container = document.getElementById('tasks');
+    container.innerHTML = '';
+    tasks.forEach(t => {
+        const div = document.createElement('div');
+        div.className = `task ${t.status}`;
+        div.draggable = true;
+        div.ondragstart = e => e.dataTransfer.setData("id", t.id);
+        div.ondragover = e => e.preventDefault();
+        div.ondrop = e => reorder(t.id, e.dataTransfer.getData("id"));
+        div.innerHTML = `
+            <b>${t.name}</b><br>
+            זמן נותר: ${Math.max(0, t.remaining).toFixed(1)} דקות<br>
+            סטטוס: ${t.status}<br>
+            <button onclick="startTask(${t.id})">▶️ התחל</button>
+            <button onclick="pauseTask(${t.id})">⏸️ השהה</button>
+            <button onclick="deleteTask(${t.id})">🗑️ מחק</button>
+        `;
+        container.appendChild(div);
     });
-    if(!res.ok) throw new Error("Bad response");
-    console.log("נשלחה בקשת JSON בהצלחה");
-  } catch(e){
-    console.warn("JSON נכשל, מנסה FormData...");
-    const fd=new FormData();
-    fd.append("name",name);
-    fd.append("hours",h);
-    fd.append("minutes",m);
-    fd.append("seconds",s);
-    await fetch("/add",{method:"POST",body:fd});
-  }
-
-  document.getElementById("newName").value="";
-  document.getElementById("newH").value="";
-  document.getElementById("newM").value="";
-  document.getElementById("newS").value="";
-  await render();
 }
 
-async function start(id){await api(`/start/${id}`,"POST");}
-async function pause(id){await api(`/pause/${id}`,"POST");}
-async function del(id){await api(`/delete/${id}`,"POST"); render();}
-async function extend(id){await api(`/extend/${id}`,"POST",{minutes:5});}
-async function updateName(id,newName){await api(`/update/${id}`,"POST",{name:newName});}
-
-setInterval(render,1000);
-document.getElementById("btnAdd").addEventListener("click", addTask);
-render();
-
-// --- גרירה לסידור ---
-let dragSrc=null;
-function enableDrag(){
-  const rows=document.querySelectorAll("#tbody tr");
-  rows.forEach(r=>{
-    r.addEventListener("dragstart",e=>{
-      dragSrc=r;
-      r.classList.add("dragging");
-      e.dataTransfer.effectAllowed="move";
+async function addTask() {
+    const name = document.getElementById('name').value.trim();
+    const duration = parseInt(document.getElementById('duration').value);
+    if (!name || !duration) return alert('הכנס שם וזמן');
+    await fetch('/add', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({name, duration})
     });
-    r.addEventListener("dragover",e=>{
-      e.preventDefault();
-      const dragging=document.querySelector(".dragging");
-      const target=e.target.closest("tr");
-      if(target && target!==dragging){
-        const tbody=target.parentNode;
-        const next=(e.clientY-target.getBoundingClientRect().top)>target.offsetHeight/2;
-        tbody.insertBefore(dragging,next?target.nextSibling:target);
-      }
-    });
-    r.addEventListener("drop",async()=>{r.classList.remove("dragging"); await saveOrder();});
-    r.addEventListener("dragend",()=>r.classList.remove("dragging"));
-  });
+    loadTasks();
 }
 
-async function saveOrder(){
-  const ids=Array.from(document.querySelectorAll("#tbody tr")).map(tr=>parseInt(tr.dataset.id));
-  await api("/reorder","POST",{order:ids});
+async function startTask(id) {
+    const res = await fetch('/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            id, status: 'running',
+            start_time: new Date().toISOString(),
+            end_time: new Date(Date.now() + 1000 * 60 * 60).toISOString()
+        })
+    });
+    loadTasks();
 }
+
+async function pauseTask(id) {
+    await fetch('/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({id, status: 'paused'})
+    });
+    loadTasks();
+}
+
+async function deleteTask(id) {
+    await fetch(`/delete/${id}`, {method: 'DELETE'});
+    loadTasks();
+}
+
+async function reorder(targetId, sourceId) {
+    if (targetId === sourceId) return;
+    const ids = [...document.querySelectorAll('.task')].map(el => parseInt(el.dataset.id));
+    await fetch('/reorder', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({order: ids})
+    });
+    loadTasks();
+}
+
+setInterval(loadTasks, 5000);
+loadTasks();
 </script>
 </body>
 </html>
