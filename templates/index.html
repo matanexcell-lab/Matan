@@ -3,13 +3,14 @@
 <head>
   <meta charset="utf-8"/>
   <title>טיימר משימות</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
-    input[type="number"] { width: 60px; }
-    input[type="text"] { width: 160px; }
+    input[type="number"] { width: 64px; }
+    input[type="text"] { width: 180px; }
     .muted { color: #777; font-size: 12px; }
     .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
     .running { background:#d9ffd9; }
@@ -22,11 +23,12 @@
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
     .toolbar { text-align:center; margin-bottom:12px }
+    button { cursor:pointer; }
   </style>
 </head>
 <body>
 
-<h1>טיימר משימות</h1>
+<h1>⏱️ טיימר משימות</h1>
 
 <div class="toolbar">
   <span id="now" class="muted"></span><br/>
@@ -41,18 +43,19 @@
   <label>שעות <input id="newH" type="number" min="0" value="0"></label>
   <label>דקות <input id="newM" type="number" min="0" value="0"></label>
   <label>שניות <input id="newS" type="number" min="0" value="0"></label>
-  <button id="btnAdd">הוסף</button>
+  <button id="btnAdd">➕ הוסף</button>
 </div>
 
 <table>
   <thead>
   <tr>
+    <th>#</th>
     <th>שם</th>
     <th>זמן התחלתי</th>
     <th>זמן נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה</th>
+    <th>עריכה (כשלא רצה)</th>
     <th>הארכה</th>
     <th>העברה</th>
     <th>פעולות</th>
@@ -63,6 +66,9 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
+let isEditing = false;          // מונע רענון בזמן הקלדה
+let lastRender = 0;             // כדי לא להציף רינדור
+const RENDER_INTERVAL = 1000;
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -84,6 +90,7 @@ async function api(url, method="GET", body=null) {
   return res.json();
 }
 
+// ===== Actions =====
 async function addTask() {
   const name = $("#newName").value.trim();
   const hours = parseInt($("#newH").value || "0", 10);
@@ -91,13 +98,15 @@ async function addTask() {
   const seconds = parseInt($("#newS").value || "0", 10);
   await api("/add", "POST", { name, hours, minutes, seconds });
   $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  render();
+  await render(true);
 }
 
-async function startTask(id){ await api(`/start/${id}`,"POST"); }
-async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
-async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
-async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
+async function startTask(id){ await api(`/start/${id}`,"POST"); await render(true); }
+async function pauseTask(id){ await api(`/pause/${id}`,"POST"); await render(true); }
+async function resetTask(id){ await api(`/reset/${id}`,"POST"); await render(true); }
+async function deleteTask(id){ await api(`/delete/${id}`,"POST"); await render(true); }
+async function setPending(id){ await api(`/set_pending/${id}`, "POST"); await render(true); }
+async function skipToNext(id){ await api(`/skip/${id}`, "POST"); await render(true); }
 
 async function extendTask(id){
   const row = document.getElementById(`row-${id}`);
@@ -105,7 +114,7 @@ async function extendTask(id){
   const m = parseInt(row.querySelector(".ext-m").value || "0",10);
   const s = parseInt(row.querySelector(".ext-s").value || "0",10);
   await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
-  render();
+  await render(true);
 }
 
 async function saveEdit(id){
@@ -115,14 +124,15 @@ async function saveEdit(id){
   const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
   const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
   await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
-  render();
+  // לא מאבד פוקוס: לא נקרא render כאן, נחכה לפולינג הבא
 }
 
 async function moveTask(id){
   const row = document.getElementById(`row-${id}`);
-  const newPos = parseInt(row.querySelector(".move-pos").value || "1", 10);
-  await api("/reorder_single","POST",{task_id: parseInt(id,10), new_position: newPos});
-  await render();
+  let newPos = parseInt(row.querySelector(".move-to").value || "0", 10);
+  if (!Number.isFinite(newPos) || newPos < 1) return;
+  await api(`/reorder_single`, "POST", { task_id: id, new_position: newPos });
+  await render(true);
 }
 
 function badgeClass(st){
@@ -132,20 +142,49 @@ function badgeClass(st){
   return "badge done";
 }
 
-async function render() {
+function blockRenderIfEditing(){
+  // אל תרנדר אם אלמנט קלט בפוקוס (מונע סגירת מקלדת)
+  const ae = document.activeElement;
+  if (!ae) return false;
+  if (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") return true;
+  return isEditing;
+}
+
+function attachFocusGuards(scopeEl){
+  const inputs = scopeEl.querySelectorAll("input,textarea");
+  inputs.forEach(inp=>{
+    inp.addEventListener("focus", ()=>{ isEditing = true; });
+    inp.addEventListener("blur",  ()=>{ isEditing = false; });
+    // במובייל – נחשב גם מגע כ"עריכה"
+    inp.addEventListener("touchstart", ()=>{ isEditing = true; }, {passive:true});
+  });
+}
+
+async function render(force=false) {
+  const nowTs = Date.now();
+  if (!force && (nowTs - lastRender < RENDER_INTERVAL)) return;
+  if (blockRenderIfEditing()) return;
+
+  lastRender = nowTs;
+
   const data = await api("/state");
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
 
   const tb = $("#tbody");
   tb.innerHTML = "";
-  data.tasks.forEach((t, i) => {
+  data.tasks.forEach((t, idx) => {
     const tr = document.createElement("tr");
     tr.id = `row-${t.id}`;
     tr.className = t.status;
+
     const canEdit = (t.status !== "running");
+
     tr.innerHTML = `
-      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}></td>
+      <td>${idx+1}</td>
+      <td>
+        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
+      </td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
       <td>${t.end_time_str || "-"}</td>
@@ -168,7 +207,7 @@ async function render() {
       </td>
       <td>
         <div class="move-grid">
-          <input class="move-pos" type="number" min="1" value="${i+1}">
+          <label>למיקום <input class="move-to" type="number" min="1" value="${idx+1}"></label>
           <button onclick="moveTask(${t.id})">העבר</button>
         </div>
       </td>
@@ -177,17 +216,37 @@ async function render() {
           <button onclick="startTask(${t.id})">התחל</button>
           <button onclick="pauseTask(${t.id})">השהה</button>
           <button onclick="resetTask(${t.id})">איפוס</button>
+          <button onclick="setPending(${t.id})">ל-Pending</button>
+          <button onclick="skipToNext(${t.id})">דלג לבאה</button>
           <button onclick="deleteTask(${t.id})">מחק</button>
         </div>
       </td>
     `;
     tb.appendChild(tr);
+
+    // חיבור מגני פוקוס/טאץ' כדי לא לסגור מקלדת
+    attachFocusGuards(tr);
   });
 }
 
-setInterval(render, 1000);
-render();
-$("#btnAdd").addEventListener("click", addTask);
+// פולינג עדין – לא כשיש פוקוס
+setInterval(()=>{ render(false).catch(()=>{}); }, RENDER_INTERVAL);
+
+// רינדור ראשון
+render(true).catch(()=>{});
+
+// הוספת משימה
+document.getElementById("btnAdd").addEventListener("click", async () => {
+  await addTask();
+});
+
+// אם המשתמש נכנס לפוקוס בשדה ההוספה – לא מרנדרים
+["newName","newH","newM","newS"].forEach(id=>{
+  const el = document.getElementById(id);
+  el.addEventListener("focus", ()=>{ isEditing = true; });
+  el.addEventListener("blur",  ()=>{ isEditing = false; });
+  el.addEventListener("touchstart", ()=>{ isEditing = true; }, {passive:true});
+});
 </script>
 </body>
 </html>
