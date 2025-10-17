@@ -17,8 +17,7 @@
     .pending { background:#f2f2f2; }
     .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
-    .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+    .edit-grid, .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .toolbar { text-align:center; margin-bottom:12px }
   </style>
 </head>
@@ -61,6 +60,8 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
+let editingMode = false;   // ננעל בזמן הקלדה
+let polling = null;        // מזהה הטיימר
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -82,6 +83,17 @@ async function api(url, method="GET", body=null) {
   return res.json();
 }
 
+function stopPolling() {
+  if (polling) clearInterval(polling);
+  polling = null;
+}
+
+function startPolling() {
+  if (!polling) polling = setInterval(() => {
+    if (!editingMode) render();
+  }, 1000);
+}
+
 async function addTask() {
   const name = $("#newName").value.trim();
   const hours = parseInt($("#newH").value || "0", 10);
@@ -96,8 +108,8 @@ async function startTask(id){ await api(`/start/${id}`,"POST"); }
 async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
 async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
-async function skipToNext(id){ await api(`/skip/${id}`, "POST"); }
-async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
+async function skipToNext(id){ await api(`/skip/${id}`,"POST"); }
+async function setPending(id){ await api(`/set_pending/${id}`,"POST"); }
 
 async function extendTask(id){
   const row = document.getElementById(`row-${id}`);
@@ -105,18 +117,22 @@ async function extendTask(id){
   const m = parseInt(row.querySelector(".ext-m").value || "0",10);
   const s = parseInt(row.querySelector(".ext-s").value || "0",10);
   await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
+  render();
 }
 
 async function saveEdit(id){
+  editingMode = false;
   const row = document.getElementById(`row-${id}`);
   const nm = row.querySelector(".edit-name").value;
   const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
   const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
   const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
   await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
+  render();
 }
 
 async function moveTask(id){
+  editingMode = false;
   const row = document.getElementById(`row-${id}`);
   const newPos = parseInt(row.querySelector(".move-pos").value || "1");
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
@@ -179,11 +195,16 @@ async function render() {
         </div>
       </td>
     `;
+    // כשהמשתמש לוחץ על שדה עריכה — עוצרים פולינג
+    tr.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focus", ()=> editingMode = true);
+      inp.addEventListener("blur", ()=> setTimeout(()=> editingMode=false, 500));
+    });
     tb.appendChild(tr);
   });
 }
 
-setInterval(render, 1000);
+startPolling();
 render();
 $("#btnAdd").addEventListener("click", addTask);
 </script>
