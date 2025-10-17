@@ -4,215 +4,101 @@
   <meta charset="utf-8"/>
   <title>טיימר משימות</title>
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
-    h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
+    body { font-family: Arial, sans-serif; direction: rtl; text-align: center; }
+    table { width: 95%; margin: auto; border-collapse: collapse; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
     input[type="number"] { width: 60px; }
     input[type="text"] { width: 160px; }
-    .muted { color: #777; font-size: 12px; }
-    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; }
-    .paused  { background:#fff0b3; }
-    .pending { background:#f2f2f2; }
-    .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
-    .actions button { margin: 0 2px; }
-    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid, .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
-    .toolbar { text-align:center; margin-bottom:12px }
-    button { cursor:pointer; }
-    .reorder-num { width: 45px; text-align: center; }
-    .reorder-mode td { background:#f4faff; }
+    button { margin: 4px; padding: 6px 12px; }
   </style>
 </head>
 <body>
 
-<h1>⏱️ טיימר משימות</h1>
+<h1>טיימר משימות</h1>
 
-<div class="toolbar">
-  <span id="now" class="muted"></span><br/>
-  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span><br/><br/>
-  <button id="btnReorderToggle">🧩 סדר מחדש</button>
-  <button id="btnReorderSave" style="display:none;">💾 שמור סדר חדש</button>
-</div>
-
-<!-- הוספת משימה -->
-<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:10px">
-  <label>שם משימה חדשה
-    <input id="newName" type="text" placeholder="שם משימה">
-  </label>
-  <label>שעות <input id="newH" type="number" min="0" value="0"></label>
-  <label>דקות <input id="newM" type="number" min="0" value="0"></label>
-  <label>שניות <input id="newS" type="number" min="0" value="0"></label>
-  <button id="btnAdd">➕ הוסף</button>
+<div>
+  <button id="reorderMode">סדר מחדש</button>
+  <button id="saveReorder" style="display:none;">שמור סדר חדש</button>
+  <button id="cancelReorder" style="display:none;">בטל</button>
 </div>
 
 <table>
   <thead>
-  <tr>
-    <th>#</th>
-    <th>שם</th>
-    <th>זמן התחלתי</th>
-    <th>זמן נותר</th>
-    <th>שעת סיום</th>
-    <th>סטטוס</th>
-    <th>עריכה</th>
-    <th>הארכה</th>
-    <th>פעולות</th>
-  </tr>
+  <tr><th>#</th><th>שם</th><th>זמן נותר</th><th>סטטוס</th><th>מיקום חדש</th><th>פעולות</th></tr>
   </thead>
   <tbody id="tbody"></tbody>
 </table>
 
 <script>
-const $ = (sel) => document.querySelector(sel);
-let isEditing = false;
-let autoSaveTimeout = null;
 let reorderMode = false;
-let currentTasks = [];
 
-function fmtHHMMSS(totalSeconds) {
-  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-}
-
+const $ = (s) => document.querySelector(s);
 async function api(url, method="GET", body=null) {
   const opt = { method, headers: { "Content-Type": "application/json" } };
   if (body) opt.body = JSON.stringify(body);
   const res = await fetch(url, opt);
-  if (!res.ok) throw new Error(await res.text());
+  if (!res.ok) throw new Error(res.statusText);
   return res.json();
 }
 
-async function addTask() {
-  const name = $("#newName").value.trim();
-  const hours = parseInt($("#newH").value || "0", 10);
-  const minutes = parseInt($("#newM").value || "0", 10);
-  const seconds = parseInt($("#newS").value || "0", 10);
-  await api("/add", "POST", { name, hours, minutes, seconds });
-  $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  render();
-}
-
-async function startTask(id){ await api(`/start/${id}`,"POST"); render(); }
-async function pauseTask(id){ await api(`/pause/${id}`,"POST"); render(); }
-async function resetTask(id){ await api(`/reset/${id}`,"POST"); render(); }
-async function deleteTask(id){ await api(`/delete/${id}`,"POST"); render(); }
-async function setPending(id){ await api(`/set_pending/${id}`,"POST"); render(); }
-async function skipToNext(id){ await api(`/skip/${id}`,"POST"); render(); }
-
-async function extendTask(id){
-  const row = document.getElementById(`row-${id}`);
-  const h = parseInt(row.querySelector(".ext-h").value || "0",10);
-  const m = parseInt(row.querySelector(".ext-m").value || "0",10);
-  const s = parseInt(row.querySelector(".ext-s").value || "0",10);
-  await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
-  render();
-}
-
-async function autoSave(id){
-  if (autoSaveTimeout) clearTimeout(autoSaveTimeout);
-  autoSaveTimeout = setTimeout(async ()=>{
-    const row = document.getElementById(`row-${id}`);
-    const nm = row.querySelector(".edit-name").value.trim();
-    const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
-    const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
-    const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-    try {
-      await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
-    } catch(e) {
-      console.warn("שגיאה בשמירה אוטומטית:", e.message);
-    }
-  }, 1200);
-}
-
-function badgeClass(st){
-  if (st === "running") return "badge running";
-  if (st === "paused")  return "badge paused";
-  if (st === "pending") return "badge pending";
-  return "badge done";
-}
-
 async function render() {
-  if (isEditing) return;
   const data = await api("/state");
-  currentTasks = data.tasks;
-  $("#overallEnd").textContent = data.overall_end_time || "-";
-  $("#now").textContent = data.now || "";
-
   const tb = $("#tbody");
   tb.innerHTML = "";
-  data.tasks.forEach((t, idx) => {
+  data.tasks.forEach((t, i) => {
     const tr = document.createElement("tr");
-    tr.id = `row-${t.id}`;
-    tr.className = t.status + (reorderMode ? " reorder-mode" : "");
-
     tr.innerHTML = `
-      <td>${reorderMode ? `<input class='reorder-num' type='number' min='1' value='${idx+1}' data-id='${t.id}'>` : (idx+1)}</td>
-      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" oninput="autoSave(${t.id})" ${reorderMode ? "disabled" : ""}></td>
-      <td class="muted">${fmtHHMMSS(t.duration)}</td>
-      <td><strong>${t.remaining_hhmmss}</strong></td>
-      <td>${t.end_time_str || "-"}</td>
-      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
+      <td>${i + 1}</td>
+      <td>${t.name}</td>
+      <td>${t.remaining_hhmmss}</td>
+      <td>${t.status}</td>
       <td>
-        <div class="edit-grid">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${reorderMode ? "disabled" : ""} oninput="autoSave(${t.id})"></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${reorderMode ? "disabled" : ""} oninput="autoSave(${t.id})"></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${reorderMode ? "disabled" : ""} oninput="autoSave(${t.id})"></label>
-        </div>
+        ${reorderMode ? `<input type="number" id="pos-${t.id}" min="1" max="${data.tasks.length}" value="${i + 1}">` : ""}
       </td>
-      <td>
-        <div class="extend-grid">
-          <label>שעות <input class="ext-h" type="number" min="0" value="0" ${reorderMode ? "disabled" : ""}></label>
-          <label>דקות <input class="ext-m" type="number" min="0" value="0" ${reorderMode ? "disabled" : ""}></label>
-          <label>שניות <input class="ext-s" type="number" min="0" value="0" ${reorderMode ? "disabled" : ""}></label>
-          <button onclick="extendTask(${t.id})" ${reorderMode ? "disabled" : ""}>הארך</button>
-        </div>
-      </td>
-      <td class="actions">
-        <div class="row-actions">
-          <button onclick="startTask(${t.id})" ${reorderMode ? "disabled" : ""}>התחל</button>
-          <button onclick="pauseTask(${t.id})" ${reorderMode ? "disabled" : ""}>השהה</button>
-          <button onclick="resetTask(${t.id})" ${reorderMode ? "disabled" : ""}>איפוס</button>
-          <button onclick="setPending(${t.id})" ${reorderMode ? "disabled" : ""}>ל-Pending</button>
-          <button onclick="skipToNext(${t.id})" ${reorderMode ? "disabled" : ""}>דלג לבאה</button>
-          <button onclick="deleteTask(${t.id})" ${reorderMode ? "disabled" : ""}>מחק</button>
-        </div>
-      </td>
+      <td><button onclick="deleteTask(${t.id})">מחק</button></td>
     `;
     tb.appendChild(tr);
   });
-
-  document.querySelectorAll("input").forEach(inp => {
-    inp.addEventListener("focus", ()=>{ isEditing = true; });
-    inp.addEventListener("blur", ()=>{ isEditing = false; });
-  });
 }
 
-$("#btnReorderToggle").addEventListener("click", ()=>{
-  reorderMode = !reorderMode;
-  $("#btnReorderSave").style.display = reorderMode ? "inline-block" : "none";
-  $("#btnReorderToggle").textContent = reorderMode ? "❌ ביטול סדר מחדש" : "🧩 סדר מחדש";
+async function deleteTask(id){
+  await api(`/delete/${id}`, "POST");
   render();
-});
+}
 
-$("#btnReorderSave").addEventListener("click", async ()=>{
-  const nums = Array.from(document.querySelectorAll(".reorder-num"));
-  nums.sort((a,b)=> parseInt(a.value)-parseInt(b.value));
-  const order = nums.map(x=> parseInt(x.dataset.id));
-  await api("/reorder", "POST", { order });
+$("#reorderMode").onclick = () => {
+  reorderMode = true;
+  $("#reorderMode").style.display = "none";
+  $("#saveReorder").style.display = "inline-block";
+  $("#cancelReorder").style.display = "inline-block";
+  render();
+};
+
+$("#cancelReorder").onclick = () => {
   reorderMode = false;
-  $("#btnReorderSave").style.display = "none";
-  $("#btnReorderToggle").textContent = "🧩 סדר מחדש";
+  $("#reorderMode").style.display = "inline-block";
+  $("#saveReorder").style.display = "none";
+  $("#cancelReorder").style.display = "none";
   render();
-});
+};
 
-setInterval(() => { if (!isEditing && !reorderMode) render(); }, 1000);
+$("#saveReorder").onclick = async () => {
+  const inputs = document.querySelectorAll("[id^='pos-']");
+  for (const input of inputs) {
+    const id = parseInt(input.id.replace("pos-",""));
+    const newPos = parseInt(input.value);
+    await api("/reorder", "POST", { task_id: id, new_position: newPos });
+  }
+  reorderMode = false;
+  $("#reorderMode").style.display = "inline-block";
+  $("#saveReorder").style.display = "none";
+  $("#cancelReorder").style.display = "none";
+  render();
+  alert("✅ הסדר נשמר בהצלחה!");
+};
+
 render();
-document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
+setInterval(() => { if (!reorderMode) render(); }, 2000);
 </script>
 </body>
 </html>
