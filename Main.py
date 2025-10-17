@@ -11,6 +11,10 @@ app.config["SQLALCHEMY_DATABASE_URI"] = "postgresql://meitar_user:rnw5jOCjnkfts5
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 db = SQLAlchemy(app)
 
+# צור את הטבלאות כבר בשלב עליית האפליקציה
+with app.app_context():
+    db.create_all()
+    print("✅ Database initialized successfully")
 
 # ---- Models ----
 class Task(db.Model):
@@ -131,5 +135,5 @@ def state():
 # ---- Run ----
 if __name__ == "__main__":
     with app.app_context():
-        db.create_all()  # ייצור אוטומטית את כל הטבלאות אם חסרות
+        db.create_all()
     app.run(host="0.0.0.0", port=10000)
