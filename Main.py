@@ -1,4 +1,3 @@
-# Main.py
 import os
 from contextlib import contextmanager
 from datetime import datetime, timedelta
@@ -84,7 +83,6 @@ def any_active(s):
     return s.query(Task).filter(Task.status.in_(["running", "paused"])).first() is not None
 
 def recompute_chain_in_db():
-    """עדכון רצף משימות — כאשר אחת מסתיימת, הבאה מתחילה אוטומטית."""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.id.asc()).all()
         now_ts = now()
@@ -204,14 +202,12 @@ def delete(task_id):
 
 @app.route("/update/<int:task_id>", methods=["POST"])
 def update(task_id):
-    """עריכת שם/זמן כאשר המשימה לא רצה."""
+    """אפשר לערוך בכל סטטוס (גם בזמן ריצה)."""
     data = request.json or {}
     with session_scope() as s:
         t = s.get(Task, task_id)
         if not t:
             return jsonify({"ok": False, "error": "not found"}), 404
-        if t.status == "running":
-            return jsonify({"ok": False, "error": "cannot edit running task"}), 400
 
         if "name" in data:
             nm = (data.get("name") or "").strip()
@@ -223,11 +219,14 @@ def update(task_id):
         ssec = int(data.get("seconds") or 0)
         if h or m or ssec:
             new_duration = h * 3600 + m * 60 + ssec
+            diff = new_duration - t.duration
             t.duration = new_duration
-            t.remaining = new_duration
-            t.end_time = None
-            if t.status == "done":
-                t.status = "pending"
+            if t.status == "running" and t.end_time:
+                t.end_time = t.end_time + timedelta(seconds=diff)
+                t.remaining = max(0, int((t.end_time - now()).total_seconds()))
+            else:
+                t.remaining = new_duration
+                t.end_time = None
         s.add(t)
     return jsonify({"ok": True})
 
