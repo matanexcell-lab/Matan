@@ -62,6 +62,7 @@
 
 <script>
 const $ = (sel) => document.querySelector(sel);
+let isEditing = false; // מצב שמונע רענון בזמן עריכה
 
 function fmtHHMMSS(totalSeconds) {
   totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
@@ -90,7 +91,7 @@ async function addTask() {
   const seconds = parseInt($("#newS").value || "0", 10);
   await api("/add", "POST", { name, hours, minutes, seconds });
   $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  render(); // עדכון מיידי
+  render();
 }
 
 async function startTask(id){ await api(`/start/${id}`,"POST"); render(); }
@@ -115,7 +116,6 @@ async function saveEdit(id){
   const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
   const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
   const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-
   try {
     await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
     render();
@@ -132,6 +132,7 @@ function badgeClass(st){
 }
 
 async function render() {
+  if (isEditing) return; // לא נרנדר בזמן כתיבה
   const data = await api("/state");
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
@@ -178,10 +179,16 @@ async function render() {
     `;
     tb.appendChild(tr);
   });
+
+  // אם אתה לוחץ על שדה, לא נרנדר שוב
+  document.querySelectorAll("input").forEach(inp => {
+    inp.addEventListener("focus", ()=>{ isEditing = true; });
+    inp.addEventListener("blur", ()=>{ isEditing = false; });
+  });
 }
 
-// רענון כל שנייה
-setInterval(render, 1000);
+// רענון רק כשלא עורכים
+setInterval(() => { if (!isEditing) render(); }, 1000);
 render();
 document.getElementById("btnAdd").addEventListener("click", async () => { await addTask(); });
 </script>
