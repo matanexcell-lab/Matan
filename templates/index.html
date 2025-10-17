@@ -1,21 +1,12 @@
-
-
-
-
-
-
-
-
-
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8"/>
   <title>טיימר משימות</title>
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; }
+    table { width: 100%; border-collapse: collapse; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
     input[type="number"] { width: 60px; }
     input[type="text"] { width: 160px; }
@@ -25,7 +16,6 @@
     .paused  { background:#fff0b3; }
     .pending { background:#f2f2f2; }
     .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
-    .actions button { margin: 0 2px; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
     .edit-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
     .extend-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
@@ -56,12 +46,13 @@
   <thead>
   <tr>
     <th>שם</th>
-    <th>זמן התחלתי</th>
-    <th>זמן נותר</th>
+    <th>משך</th>
+    <th>נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה (כשלא פעילה)</th>
-    <th>הארכה חופשית</th>
+    <th>עריכה</th>
+    <th>הארכה</th>
+    <th>העבר</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -98,16 +89,15 @@ async function addTask() {
   const seconds = parseInt($("#newS").value || "0", 10);
   await api("/add", "POST", { name, hours, minutes, seconds });
   $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  render(); // עדכון מיידי בלי לחכות לפולינג
+  render();
 }
 
 async function startTask(id){ await api(`/start/${id}`,"POST"); }
 async function pauseTask(id){ await api(`/pause/${id}`,"POST"); }
 async function resetTask(id){ await api(`/reset/${id}`,"POST"); }
 async function deleteTask(id){ await api(`/delete/${id}`,"POST"); }
-
-async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
 async function skipToNext(id){ await api(`/skip/${id}`, "POST"); }
+async function setPending(id){ await api(`/set_pending/${id}`, "POST"); }
 
 async function extendTask(id){
   const row = document.getElementById(`row-${id}`);
@@ -126,6 +116,13 @@ async function saveEdit(id){
   await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
 }
 
+async function moveTask(id){
+  const row = document.getElementById(`row-${id}`);
+  const newPos = parseInt(row.querySelector(".move-pos").value || "1");
+  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  render();
+}
+
 function badgeClass(st){
   if (st === "running") return "badge running";
   if (st === "paused")  return "badge paused";
@@ -137,46 +134,46 @@ async function render() {
   const data = await api("/state");
   $("#overallEnd").textContent = data.overall_end_time || "-";
   $("#now").textContent = data.now || "";
-
   const tb = $("#tbody");
   tb.innerHTML = "";
+
   data.tasks.forEach(t => {
     const tr = document.createElement("tr");
     tr.id = `row-${t.id}`;
     tr.className = t.status;
-
     const canEdit = (t.status !== "running");
-
     tr.innerHTML = `
-      <td>
-        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
-      </td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
       <td>${t.end_time_str || "-"}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
+          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}>
+          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}>
+          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}>
           <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
         </div>
       </td>
       <td>
         <div class="extend-grid">
-          <label>שעות <input class="ext-h" type="number" min="0" value="0"></label>
-          <label>דקות <input class="ext-m" type="number" min="0" value="0"></label>
-          <label>שניות <input class="ext-s" type="number" min="0" value="0"></label>
+          <input class="ext-h" type="number" min="0" value="0">
+          <input class="ext-m" type="number" min="0" value="0">
+          <input class="ext-s" type="number" min="0" value="0">
           <button onclick="extendTask(${t.id})">הארך</button>
         </div>
       </td>
-      <td class="actions">
+      <td>
+        <input class="move-pos" type="number" min="1" value="${t.position+1}" style="width:50px">
+        <button onclick="moveTask(${t.id})">העבר</button>
+      </td>
+      <td>
         <div class="row-actions">
           <button onclick="startTask(${t.id})">התחל</button>
           <button onclick="pauseTask(${t.id})">השהה</button>
           <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="setPending(${t.id})">הפוך ל-pending</button>
+          <button onclick="setPending(${t.id})">הפוך ל-Pending</button>
           <button onclick="skipToNext(${t.id})">דלג לבאה</button>
           <button onclick="deleteTask(${t.id})">מחק</button>
         </div>
@@ -186,29 +183,9 @@ async function render() {
   });
 }
 
-// פולינג כל שנייה + הוספה מיידית
 setInterval(render, 1000);
 render();
-document.getElementById("btnAdd").addEventListener("click", async () => { 
-  await addTask(); 
-});
+$("#btnAdd").addEventListener("click", addTask);
 </script>
 </body>
 </html>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
