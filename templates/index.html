@@ -2,8 +2,9 @@
 <html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8"/>
-  <title>טיימר משימות</title>
+  <title>⏱️ טיימר משימות</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
@@ -27,7 +28,6 @@
   </style>
 </head>
 <body>
-
 <h1>⏱️ טיימר משימות</h1>
 
 <div class="toolbar">
@@ -55,7 +55,7 @@
     <th>זמן נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה (כשלא רצה)</th>
+    <th>עריכה</th>
     <th>הארכה</th>
     <th>העברה</th>
     <th>פעולות</th>
@@ -65,153 +65,121 @@
 </table>
 
 <script>
-const $ = (sel) => document.querySelector(sel);
-let isEditing = false;          // מונע רענון בזמן הקלדה
-let lastRender = 0;             // כדי לא להציף רינדור
-const RENDER_INTERVAL = 1000;
+const $ = s => document.querySelector(s);
+let isEditing = false;
 
-function fmtHHMMSS(totalSeconds) {
-  totalSeconds = Math.max(0, parseInt(totalSeconds || 0, 10));
-  const h = Math.floor(totalSeconds / 3600);
-  const m = Math.floor((totalSeconds % 3600) / 60);
-  const s = totalSeconds % 60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+function fmtHHMMSS(totalSeconds){
+  totalSeconds = Math.max(0, parseInt(totalSeconds||0,10));
+  const h=Math.floor(totalSeconds/3600);
+  const m=Math.floor((totalSeconds%3600)/60);
+  const s=totalSeconds%60;
+  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
 }
 
-async function api(url, method="GET", body=null) {
-  const opt = { method, headers: { "Content-Type": "application/json" } };
-  if (body) opt.body = JSON.stringify(body);
-  const res = await fetch(url, opt);
-  if (!res.ok) {
-    let msg;
-    try { msg = (await res.json()).error || res.statusText; } catch(e) { msg = res.statusText; }
-    throw new Error(msg);
-  }
+async function api(url, method="GET", body=null){
+  const opt={method,headers:{"Content-Type":"application/json"}};
+  if(body) opt.body=JSON.stringify(body);
+  const res=await fetch(url,opt);
+  if(!res.ok) throw new Error(await res.text());
   return res.json();
 }
 
-// ===== Actions =====
-async function addTask() {
-  const name = $("#newName").value.trim();
-  const hours = parseInt($("#newH").value || "0", 10);
-  const minutes = parseInt($("#newM").value || "0", 10);
-  const seconds = parseInt($("#newS").value || "0", 10);
-  await api("/add", "POST", { name, hours, minutes, seconds });
-  $("#newName").value = ""; $("#newH").value = 0; $("#newM").value = 0; $("#newS").value = 0;
-  await render(true);
+async function addTask(){
+  const name=$("#newName").value.trim();
+  const h=parseInt($("#newH").value||"0");
+  const m=parseInt($("#newM").value||"0");
+  const s=parseInt($("#newS").value||"0");
+  await api("/add","POST",{name,hours:h,minutes:m,seconds:s});
+  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
 }
 
-async function startTask(id){ await api(`/start/${id}`,"POST"); await render(true); }
-async function pauseTask(id){ await api(`/pause/${id}`,"POST"); await render(true); }
-async function resetTask(id){ await api(`/reset/${id}`,"POST"); await render(true); }
-async function deleteTask(id){ await api(`/delete/${id}`,"POST"); await render(true); }
-async function setPending(id){ await api(`/set_pending/${id}`, "POST"); await render(true); }
-async function skipToNext(id){ await api(`/skip/${id}`, "POST"); await render(true); }
+async function startTask(id){await api(`/start/${id}`,"POST");}
+async function pauseTask(id){await api(`/pause/${id}`,"POST");}
+async function resetTask(id){await api(`/reset/${id}`,"POST");}
+async function deleteTask(id){await api(`/delete/${id}`,"POST");}
+async function setPending(id){await api(`/set_pending/${id}`,"POST");}
+async function skipToNext(id){await api(`/skip/${id}`,"POST");}
 
 async function extendTask(id){
-  const row = document.getElementById(`row-${id}`);
-  const h = parseInt(row.querySelector(".ext-h").value || "0",10);
-  const m = parseInt(row.querySelector(".ext-m").value || "0",10);
-  const s = parseInt(row.querySelector(".ext-s").value || "0",10);
-  await api(`/extend/${id}`, "POST", { hours: h, minutes: m, seconds: s });
-  await render(true);
+  const r=document.getElementById(`row-${id}`);
+  const h=parseInt(r.querySelector(".ext-h").value||"0");
+  const m=parseInt(r.querySelector(".ext-m").value||"0");
+  const s=parseInt(r.querySelector(".ext-s").value||"0");
+  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
 }
 
 async function saveEdit(id){
-  const row = document.getElementById(`row-${id}`);
-  const nm = row.querySelector(".edit-name").value;
-  const h  = parseInt(row.querySelector(".edit-h").value || "0",10);
-  const m  = parseInt(row.querySelector(".edit-m").value || "0",10);
-  const s  = parseInt(row.querySelector(".edit-s").value || "0",10);
-  await api(`/update/${id}`, "POST", { name: nm, hours: h, minutes: m, seconds: s });
-  // לא מאבד פוקוס: לא נקרא render כאן, נחכה לפולינג הבא
+  const r=document.getElementById(`row-${id}`);
+  const nm=r.querySelector(".edit-name").value;
+  const h=parseInt(r.querySelector(".edit-h").value||"0");
+  const m=parseInt(r.querySelector(".edit-m").value||"0");
+  const s=parseInt(r.querySelector(".edit-s").value||"0");
+  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
 }
 
 async function moveTask(id){
-  const row = document.getElementById(`row-${id}`);
-  let newPos = parseInt(row.querySelector(".move-to").value || "0", 10);
-  if (!Number.isFinite(newPos) || newPos < 1) return;
-  await api(`/reorder_single`, "POST", { task_id: id, new_position: newPos });
-  await render(true);
+  const r=document.getElementById(`row-${id}`);
+  const newPos=parseInt(r.querySelector(".move-to").value||"0");
+  if(newPos<1) return;
+  await api(`/reorder_single`,"POST",{task_id:id,new_position:newPos});
 }
 
 function badgeClass(st){
-  if (st === "running") return "badge running";
-  if (st === "paused")  return "badge paused";
-  if (st === "pending") return "badge pending";
+  if(st==="running") return "badge running";
+  if(st==="paused") return "badge paused";
+  if(st==="pending") return "badge pending";
   return "badge done";
 }
 
-function blockRenderIfEditing(){
-  // אל תרנדר אם אלמנט קלט בפוקוס (מונע סגירת מקלדת)
-  const ae = document.activeElement;
-  if (!ae) return false;
-  if (ae.tagName === "INPUT" || ae.tagName === "TEXTAREA") return true;
-  return isEditing;
-}
-
-function attachFocusGuards(scopeEl){
-  const inputs = scopeEl.querySelectorAll("input,textarea");
-  inputs.forEach(inp=>{
-    inp.addEventListener("focus", ()=>{ isEditing = true; });
-    inp.addEventListener("blur",  ()=>{ isEditing = false; });
-    // במובייל – נחשב גם מגע כ"עריכה"
-    inp.addEventListener("touchstart", ()=>{ isEditing = true; }, {passive:true});
+function attachFocusGuards(el){
+  el.querySelectorAll("input,textarea").forEach(inp=>{
+    inp.addEventListener("focus",()=>isEditing=true);
+    inp.addEventListener("blur",()=>isEditing=false);
+    inp.addEventListener("touchstart",()=>isEditing=true,{passive:true});
   });
 }
 
-async function render(force=false) {
-  const nowTs = Date.now();
-  if (!force && (nowTs - lastRender < RENDER_INTERVAL)) return;
-  if (blockRenderIfEditing()) return;
-
-  lastRender = nowTs;
-
-  const data = await api("/state");
-  $("#overallEnd").textContent = data.overall_end_time || "-";
-  $("#now").textContent = data.now || "";
-
-  const tb = $("#tbody");
-  tb.innerHTML = "";
-  data.tasks.forEach((t, idx) => {
-    const tr = document.createElement("tr");
-    tr.id = `row-${t.id}`;
-    tr.className = t.status;
-
-    const canEdit = (t.status !== "running");
-
-    tr.innerHTML = `
+function renderData(data){
+  if(isEditing) return;
+  $("#overallEnd").textContent=data.overall_end_time||"-";
+  $("#now").textContent=data.now||"";
+  const tb=$("#tbody");
+  tb.innerHTML="";
+  data.tasks.forEach((t,idx)=>{
+    const canEdit=t.status!=="running";
+    const tr=document.createElement("tr");
+    tr.id=`row-${t.id}`;
+    tr.className=t.status;
+    tr.innerHTML=`
       <td>${idx+1}</td>
-      <td>
-        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit ? "" : "disabled"}>
-      </td>
+      <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td class="muted">${fmtHHMMSS(t.duration)}</td>
       <td><strong>${t.remaining_hhmmss}</strong></td>
-      <td>${t.end_time_str || "-"}</td>
+      <td>${t.end_time_str||"-"}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
-          <label>שעות <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit ? "" : "disabled"}></label>
-          <label>דקות <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit ? "" : "disabled"}></label>
-          <label>שניות <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit ? "" : "disabled"}></label>
-          <button ${canEdit ? "" : "disabled"} onclick="saveEdit(${t.id})">עדכן</button>
+          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>
+          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>
+          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
+          <button ${canEdit?"":"disabled"} onclick="saveEdit(${t.id})">עדכן</button>
         </div>
       </td>
       <td>
         <div class="extend-grid">
-          <label>שעות <input class="ext-h" type="number" min="0" value="0"></label>
-          <label>דקות <input class="ext-m" type="number" min="0" value="0"></label>
-          <label>שניות <input class="ext-s" type="number" min="0" value="0"></label>
+          <input class="ext-h" type="number" min="0" value="0">
+          <input class="ext-m" type="number" min="0" value="0">
+          <input class="ext-s" type="number" min="0" value="0">
           <button onclick="extendTask(${t.id})">הארך</button>
         </div>
       </td>
       <td>
         <div class="move-grid">
-          <label>למיקום <input class="move-to" type="number" min="1" value="${idx+1}"></label>
+          <input class="move-to" type="number" min="1" value="${idx+1}">
           <button onclick="moveTask(${t.id})">העבר</button>
         </div>
       </td>
-      <td class="actions">
+      <td>
         <div class="row-actions">
           <button onclick="startTask(${t.id})">התחל</button>
           <button onclick="pauseTask(${t.id})">השהה</button>
@@ -220,32 +188,24 @@ async function render(force=false) {
           <button onclick="skipToNext(${t.id})">דלג לבאה</button>
           <button onclick="deleteTask(${t.id})">מחק</button>
         </div>
-      </td>
-    `;
+      </td>`;
     tb.appendChild(tr);
-
-    // חיבור מגני פוקוס/טאץ' כדי לא לסגור מקלדת
     attachFocusGuards(tr);
   });
 }
 
-// פולינג עדין – לא כשיש פוקוס
-setInterval(()=>{ render(false).catch(()=>{}); }, RENDER_INTERVAL);
+// התחברות לשרת SocketIO
+const socket=io();
+socket.on("connect",()=>console.log("🔗 Connected to server"));
+socket.on("update",data=>renderData(data));
 
-// רינדור ראשון
-render(true).catch(()=>{});
-
-// הוספת משימה
-document.getElementById("btnAdd").addEventListener("click", async () => {
-  await addTask();
-});
-
-// אם המשתמש נכנס לפוקוס בשדה ההוספה – לא מרנדרים
+// כפתור הוספה
+$("#btnAdd").addEventListener("click",addTask);
 ["newName","newH","newM","newS"].forEach(id=>{
-  const el = document.getElementById(id);
-  el.addEventListener("focus", ()=>{ isEditing = true; });
-  el.addEventListener("blur",  ()=>{ isEditing = false; });
-  el.addEventListener("touchstart", ()=>{ isEditing = true; }, {passive:true});
+  const el=document.getElementById(id);
+  el.addEventListener("focus",()=>isEditing=true);
+  el.addEventListener("blur",()=>isEditing=false);
+  el.addEventListener("touchstart",()=>isEditing=true,{passive:true});
 });
 </script>
 </body>
