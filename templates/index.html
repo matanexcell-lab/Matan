@@ -33,6 +33,7 @@
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span>
 </div>
 
+<!-- הוספת משימה -->
 <div style="text-align:center;margin-bottom:10px">
   <input id="newName" type="text" placeholder="שם משימה">
   <input id="newH" type="number" min="0" value="0"> שעות
@@ -78,21 +79,22 @@ function fmt(t){
 }
 function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
 
-// חישוב לוקאלי של שעת סיום כוללת
+// === חישוב לוקאלי של שעת סיום כוללת ===
 function computeOverallEnd() {
   const nowMs = Date.now();
-  let baseMs = nowMs;
-  let runningFound = false;
-  for (let t of tasks) {
+  let total = 0;
+  let foundRunning = false;
+  for (const t of tasks) {
     if (t.status === "running") {
-      baseMs += t.remaining * 1000;
-      runningFound = true;
+      total += t.remaining;
+      foundRunning = true;
     } else if (t.status === "paused" || t.status === "pending") {
-      baseMs += t.remaining * 1000;
+      total += t.remaining;
     }
   }
-  if (!runningFound && tasks.length === 0) return "-";
-  return tzFmt.format(new Date(baseMs));
+  if (!foundRunning && total === 0) return "-";
+  const end = new Date(nowMs + total * 1000);
+  return tzFmt.format(end);
 }
 
 async function api(url, method="GET", body=null){
@@ -102,7 +104,7 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-// === סנכרון עם השרת ===
+// === סינכרון עם השרת ===
 async function syncState(){
   if(syncing || isTyping) return;
   syncing = true;
@@ -169,6 +171,7 @@ function renderTasks(){
   });
 }
 
+// === פעולות ===
 async function action(url){
   await api(url,"POST");
   await syncState();
@@ -197,6 +200,7 @@ async function moveTask(id){
   await syncState();
 }
 
+// === הוספת משימה ===
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
@@ -205,23 +209,16 @@ $("#btnAdd").onclick=async()=>{
   await syncState();
 };
 
-// לולאת עדכון רציפה
+// === לולאת עדכון כל שנייה ===
 setInterval(()=>{
-  // מעדכן נותר
   tasks.forEach(t=>{
     if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
   });
-
-  // מעדכן את המספרים על המסך
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
-
-  // מעדכן את השעה
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-
-  // מעדכן שעת סיום כוללת
   $("#overallEnd").textContent = computeOverallEnd();
 },1000);
 
