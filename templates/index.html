@@ -171,11 +171,21 @@ function renderTasks(){
   });
 }
 
-// === פעולות ===
+// === פעולות עם עדכון מיידי ===
 async function action(url){
+  // עדכון מיידי בצד הלקוח
+  const id = parseInt(url.split("/").pop());
+  const t = tasks.find(x => x.id === id);
+  if (t && url.includes("/start/")) t.status = "running";
+  if (t && url.includes("/pause/")) t.status = "paused";
+  if (t && url.includes("/reset/")) t.remaining = t.duration;
+  renderTasks();
+
+  // עדכון בשרת
   await api(url,"POST");
   await syncState();
 }
+
 async function updateTask(id){
   const row=$("#row-"+id);
   const nm=row.querySelector(".edit-name").value;
