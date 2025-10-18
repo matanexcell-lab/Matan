@@ -19,18 +19,22 @@
     .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
     button { cursor:pointer; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
+    .edit-grid, .extend-grid, .move-grid {
+      display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
+    }
   </style>
 </head>
 <body>
 
 <h1>⏱️ טיימר משימות</h1>
 
-<div style="text-align:center">
+<div style="text-align:center;margin-bottom:10px">
   <div id="now" class="muted"></div>
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span>
 </div>
 
-<div style="text-align:center;margin:10px 0">
+<!-- הוספת משימה -->
+<div style="text-align:center;margin-bottom:10px">
   <input id="newName" type="text" placeholder="שם משימה">
   <input id="newH" type="number" min="0" value="0"> שעות
   <input id="newM" type="number" min="0" value="0"> דקות
@@ -46,6 +50,9 @@
     <th>נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
+    <th>עריכה</th>
+    <th>הארכה</th>
+    <th>העברה</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -55,46 +62,73 @@
 <script>
 const $ = s => document.querySelector(s);
 let tasks = [];
-let fetching = false;
-let lastUpdate = Date.now();
+let lastSync = 0;
+let syncing = false;
 
-function fmt(t){t=Math.max(0,parseInt(t));let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;}
+function fmt(t){
+  t=Math.max(0,parseInt(t));
+  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
+  return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
 function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
 
-async function api(url, method="GET", body=null, timeout=2000){
-  const ctrl = new AbortController();
-  const id = setTimeout(()=>ctrl.abort(), timeout);
-  try {
-    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: body?JSON.stringify(body):null, signal:ctrl.signal});
+async function api(url, method="GET", body=null, timeout=2500){
+  const ctrl=new AbortController();const id=setTimeout(()=>ctrl.abort(),timeout);
+  try{
+    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null,signal:ctrl.signal});
     clearTimeout(id);
     return await res.json();
-  } catch { return null; }
+  }catch{return null;}
 }
 
-async function safeFetchState(){
-  if(fetching) return;
-  fetching = true;
+// === סינכרון עדין מהשרת ===
+async function syncState(){
+  if(syncing) return;
+  syncing=true;
   const data = await api("/state");
-  fetching = false;
-  if(!data || !data.ok) return;
+  syncing=false;
+  if(!data||!data.ok) return;
   tasks = data.tasks;
   $("#overallEnd").textContent = data.overall_end_time;
-  $("#now").textContent = data.now;
   renderTasks();
 }
 
+// === הצגת משימות ===
 function renderTasks(){
   const tb=$("#tbody");
   tb.innerHTML="";
   tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
     tr.className=t.status;
+    const canEdit=(t.status!=="running");
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td>${t.name}</td>
+      <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
       <td>${t.end_time_str||"-"}</td>
       <td><span class="${badge(t.status)}">${t.status}</span></td>
+      <td>
+        <div class="edit-grid">
+          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
+          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
+          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
+          <button ${canEdit?"":"disabled"} onclick="updateTask(${t.id})">עדכן</button>
+        </div>
+      </td>
+      <td>
+        <div class="extend-grid">
+          <input class="ext-h" type="number" min="0" value="0">:
+          <input class="ext-m" type="number" min="0" value="0">:
+          <input class="ext-s" type="number" min="0" value="0">
+          <button onclick="extendTask(${t.id})">הארך</button>
+        </div>
+      </td>
+      <td>
+        <div class="move-grid">
+          <input class="move-to" type="number" min="1" value="${i+1}">
+          <button onclick="moveTask(${t.id})">העבר</button>
+        </div>
+      </td>
       <td class="row-actions">
         <button onclick="act('/start/${t.id}')">התחל</button>
         <button onclick="act('/pause/${t.id}')">השהה</button>
@@ -107,36 +141,62 @@ function renderTasks(){
   });
 }
 
-async function act(url){
-  api(url,"POST"); // לא מחכה לתשובה
-  safeFetchState(); // רענון רך
+// === פעולות ===
+async function act(url){ api(url,"POST"); setTimeout(syncState,500); }
+async function updateTask(id){
+  const r=$("#row-"+id)||document.getElementById(`row-${id}`);
+  const row=document.getElementById(`row-${id}`)||document.querySelector(`[data-id='${id}']`)?.closest("tr");
+  if(!row)return;
+  const nm=row.querySelector(".edit-name").value;
+  const h=parseInt(row.querySelector(".edit-h").value)||0;
+  const m=parseInt(row.querySelector(".edit-m").value)||0;
+  const s=parseInt(row.querySelector(".edit-s").value)||0;
+  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
+  syncState();
+}
+async function extendTask(id){
+  const row=document.getElementById(`row-${id}`)||document.querySelector(`[data-id='${id}']`)?.closest("tr");
+  if(!row)return;
+  const h=parseInt(row.querySelector(".ext-h").value)||0;
+  const m=parseInt(row.querySelector(".ext-m").value)||0;
+  const s=parseInt(row.querySelector(".ext-s").value)||0;
+  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
+  syncState();
+}
+async function moveTask(id){
+  const row=document.getElementById(`row-${id}`)||document.querySelector(`[data-id='${id}']`)?.closest("tr");
+  if(!row)return;
+  const newPos=parseInt(row.querySelector(".move-to").value)||1;
+  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  syncState();
 }
 
+// === הוספת משימה ===
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
   $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  safeFetchState();
+  syncState();
 };
 
-// עדכון שניות ברקע (מקומי)
+// === עדכון כל שנייה (זמן ריצה) ===
 setInterval(()=>{
   tasks.forEach(t=>{
     if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
   });
-  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   const rems=document.querySelectorAll(".remain");
   rems.forEach(span=>{
     const id=parseInt(span.dataset.id);
     const t=tasks.find(x=>x.id===id);
     if(t) span.textContent=fmt(t.remaining);
   });
+  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
 },1000);
 
-// פולינג מהשרת כל 3 שניות
-setInterval(safeFetchState,3000);
-safeFetchState();
+// === סינכרון מהשרת כל 3 שניות ===
+setInterval(syncState,3000);
+syncState();
 </script>
 </body>
 </html>
