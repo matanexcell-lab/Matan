@@ -65,7 +65,6 @@
 const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
-let isTyping = false;
 let lastServerSync = 0;
 let frozen = false;
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
@@ -107,7 +106,7 @@ async function api(url, method="GET", body=null){
 
 async function syncState(force=false){
   const now = Date.now();
-  if(syncing || isTyping) return;
+  if(syncing) return;
   if(!force && now - lastServerSync < 2000) return;
   syncing = true;
   const data = await api("/state");
@@ -120,26 +119,21 @@ async function syncState(force=false){
 }
 
 function renderTasks(){
-  if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
   const nowMs = Date.now();
   let cumulative = nowMs;
-  tasks.forEach((t,i)=>{
-    let startMs, endMs;
-    if(frozen){
-      startMs = t._startMs || nowMs;
-      endMs = t._endMs || (startMs + t.remaining*1000);
-    } else {
-      startMs = cumulative;
-      endMs = startMs + t.remaining*1000;
-      t._startMs = startMs;
-      t._endMs = endMs;
-      cumulative = endMs;
-    }
 
-    const startStr = tzFmt.format(new Date(startMs));
-    const endStr = tzFmt.format(new Date(endMs));
+  tasks.forEach((t,i)=>{
+    // לחשב שעת התחלה וסיום באופן דינמי
+    if(!frozen){
+      t.start_time = new Date(cumulative);
+      cumulative += t.remaining*1000;
+      t.end_time = new Date(cumulative);
+    } else if(!t.start_time){
+      t.start_time = new Date();
+      t.end_time = new Date(Date.now() + t.remaining*1000);
+    }
 
     const tr=document.createElement("tr");
     tr.id="row-"+t.id;
@@ -150,8 +144,8 @@ function renderTasks(){
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
-      <td>${startStr}</td>
-      <td>${endStr}</td>
+      <td>${tzFmt.format(t.start_time)}</td>
+      <td>${tzFmt.format(t.end_time)}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
@@ -185,28 +179,22 @@ function renderTasks(){
       </td>`;
 
     tb.appendChild(tr);
-    tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focus",()=>isTyping=true);
-      inp.addEventListener("blur",()=>isTyping=false);
-      inp.addEventListener("touchstart",()=>isTyping=true,{passive:true});
-    });
   });
 }
 
 async function action(url){
-  syncing=true;
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
+    // שינוי מקומי מיידי
     if(url.includes("/start/")) {t.status="running"; frozen=true;}
     if(url.includes("/pause/")) {t.status="paused"; frozen=false;}
-    if(url.includes("/reset/")) t.remaining=t.duration;
-    if(url.includes("/set_pending/")) t.status="pending";
-    if(url.includes("/skip/")) t.status="done";
-    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
+    if(url.includes("/set_pending/")) {t.status="pending"; frozen=false;}
+    if(url.includes("/skip/")) {t.status="done";}
+    if(url.includes("/delete/")) {tasks=tasks.filter(x=>x.id!==id);}
+    renderTasks();
   }
   await api(url,"POST");
-  syncing=false;
   await syncState(true);
 }
 
@@ -241,15 +229,13 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-// === עדכון חי כל שנייה ===
+// לולאת עדכון חיה
 setInterval(()=>{
-  if(syncing) return;
   tasks.forEach(t=>{
-    if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
-  });
-  document.querySelectorAll(".remain").forEach(span=>{
-    const t=tasks.find(x=>x.id==span.dataset.id);
-    if(t) span.textContent=fmt(t.remaining);
+    if(t.status==="running"){
+      t.remaining=Math.max(0,t.remaining-1);
+      if(t.remaining===0){ t.status="done"; frozen=false; }
+    }
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent=computeOverallEnd();
