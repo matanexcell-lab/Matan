@@ -66,8 +66,8 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
-let frozen = false;
 let isTyping = false;
+let frozenLayout = null; // לשמירת טיימינג יציב למשימות הלא פעילות
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -115,63 +115,74 @@ async function syncState(force=false){
   lastServerSync = now;
   if(!data || !data.ok) return;
   tasks = data.tasks;
-  frozen = tasks.some(t=>t.status==="running");
-  renderTasks();
+  renderTasks(true);
 }
 
-/* ✅ חישוב יציב של שעות התחלה/סיום */
-function computeTimes(){
+/* ✅ חישוב שעות יציב */
+function computeTimesOnce(){
   const now = Date.now();
   const n = tasks.length;
   const r = tasks.findIndex(t => t.status === 'running');
 
+  let layout = [];
   if (r === -1) {
-    // אין משימה פעילה
     let base = now;
     for (let i = 0; i < n; i++) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
-      // נשמור רק פעם ראשונה
-      if (!tasks[i].start_time_ms || !tasks[i].end_time_ms) {
-        tasks[i].start_time_ms = base;
-        tasks[i].end_time_ms   = base + dur;
-      }
-      base = tasks[i].end_time_ms;
+      layout.push({
+        id: tasks[i].id,
+        start: base,
+        end: base + dur
+      });
+      base += dur;
     }
-    return;
+  } else {
+    const run = tasks[r];
+    const elapsed = Math.max(0, run.duration - run.remaining);
+    const startRun = now - elapsed * 1000;
+    const endRun = now + run.remaining * 1000;
+
+    // לפני המשימה הפעילה
+    let end = startRun;
+    for (let i = r - 1; i >= 0; i--) {
+      const dur = Math.max(0, tasks[i].remaining) * 1000;
+      layout.unshift({
+        id: tasks[i].id,
+        start: end - dur,
+        end: end
+      });
+      end -= dur;
+    }
+
+    // המשימה הפעילה
+    layout.push({
+      id: run.id,
+      start: startRun,
+      end: endRun
+    });
+
+    // אחרי המשימה הפעילה
+    let start = endRun;
+    for (let i = r + 1; i < n; i++) {
+      const dur = Math.max(0, tasks[i].remaining) * 1000;
+      layout.push({
+        id: tasks[i].id,
+        start: start,
+        end: start + dur
+      });
+      start += dur;
+    }
   }
 
-  // יש משימה פעילה
-  const run = tasks[r];
-  const elapsed = Math.max(0, run.duration - run.remaining);
-  run.start_time_ms = run.start_time_ms || (now - elapsed * 1000);
-  run.end_time_ms   = now + run.remaining * 1000;
-
-  // משימות לפני
-  let endMs = run.start_time_ms;
-  for (let i = r - 1; i >= 0; i--) {
-    const dur = Math.max(0, tasks[i].remaining) * 1000;
-    if (!tasks[i].start_time_ms || !tasks[i].end_time_ms) {
-      tasks[i].end_time_ms   = endMs;
-      tasks[i].start_time_ms = endMs - dur;
-    }
-    endMs = tasks[i].start_time_ms;
-  }
-
-  // משימות אחרי — קבועות, לא נעדכן בכל פעם
-  let startMs = run.end_time_ms;
-  for (let i = r + 1; i < n; i++) {
-    const dur = Math.max(0, tasks[i].remaining) * 1000;
-    if (!tasks[i].start_time_ms || !tasks[i].end_time_ms) {
-      tasks[i].start_time_ms = startMs;
-      tasks[i].end_time_ms   = startMs + dur;
-    }
-    startMs = tasks[i].end_time_ms;
-  }
+  frozenLayout = layout; // שומר מבנה יציב
 }
 
-function renderTasks(){
+/* ✅ רינדור משימות */
+function renderTasks(fromSync=false){
   if(isTyping) return;
-  computeTimes();
+
+  if (!frozenLayout || fromSync) computeTimesOnce();
+
   const tb=$("#tbody");
   tb.innerHTML="";
   tasks.forEach((t,i)=>{
@@ -179,8 +190,11 @@ function renderTasks(){
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-    const startStr = tzFmt.format(new Date(t.start_time_ms));
-    const endStr   = tzFmt.format(new Date(t.end_time_ms));
+
+    const layout = frozenLayout.find(x=>x.id===t.id);
+    const startStr = tzFmt.format(new Date(layout.start));
+    const endStr   = tzFmt.format(new Date(layout.end));
+
     tr.innerHTML=`
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
@@ -227,17 +241,17 @@ function renderTasks(){
   });
 }
 
+/* ✅ עדכון פעולות */
 async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
-    if(url.includes("/start/")) { t.status="running"; t.start_time_ms=null; t.end_time_ms=null; }
-    if(url.includes("/pause/")) t.status="paused";
-    if(url.includes("/set_pending/")) t.status="pending";
-    if(url.includes("/skip/")) t.status="done";
+    if(url.includes("/start/")) { t.status="running"; computeTimesOnce(); }
+    if(url.includes("/pause/")) { t.status="paused"; computeTimesOnce(); }
+    if(url.includes("/set_pending/")) { t.status="pending"; computeTimesOnce(); }
+    if(url.includes("/skip/")) { t.status="done"; computeTimesOnce(); }
     if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
-    frozen = tasks.some(t=>t.status==="running");
-    renderTasks();
+    renderTasks(true);
   }
   await api(url,"POST");
   await syncState(true);
@@ -274,21 +288,19 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-// === עדכון חי כל שנייה ===
+/* ✅ עדכון שוטף */
 setInterval(()=>{
   const running = tasks.find(t=>t.status==="running");
   if(running){
     running.remaining = Math.max(0,running.remaining - 1);
     if(running.remaining === 0) running.status="done";
   }
-  computeTimes();
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent=computeOverallEnd();
-  renderTasks();
 },1000);
 
 setInterval(()=>syncState(false),2500);
