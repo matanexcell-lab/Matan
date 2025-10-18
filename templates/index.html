@@ -5,7 +5,7 @@
   <title>⏱️ טיימר משימות</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; transition: background 0.3s ease; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
     h1 { text-align:center; }
     table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
@@ -13,20 +13,16 @@
     input[type="text"] { width: 180px; }
     .muted { color: #777; font-size: 12px; }
     .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; transition: background-color 0.5s ease; }
-    .paused  { background:#fff0b3; transition: background-color 0.5s ease; }
-    .pending { background:#f2f2f2; transition: background-color 0.5s ease; }
-    .done    { background:#e6e6e6; text-decoration: line-through; color:#666; transition: background-color 0.5s ease; }
+    .running { background:#d9ffd9; transition: background-color 0.4s ease; }
+    .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
+    .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
+    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
     button { cursor:pointer; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
     .edit-grid, .extend-grid, .move-grid {
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
-
-    /* ✨ אפקט מעבר צבע כשסטטוס משתנה */
-    tr {
-      transition: background-color 0.5s ease, color 0.5s ease;
-    }
+    tr { transition: background-color 0.4s ease; }
   </style>
 </head>
 <body>
@@ -69,6 +65,7 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let isTyping = false;
+let lastServerSync = 0;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -84,7 +81,7 @@ function fmt(t){
 }
 function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
 
-// === חישוב לוקאלי של שעת סיום כוללת ===
+// חישוב שעת סיום כוללת לוקאלית
 function computeOverallEnd() {
   const nowMs = Date.now();
   let total = 0;
@@ -104,12 +101,14 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-// === סינכרון עם השרת ===
-async function syncState(){
-  if(syncing || isTyping) return;
+async function syncState(force=false){
+  const now = Date.now();
+  if (syncing || isTyping) return;
+  if (!force && now - lastServerSync < 2000) return;
   syncing = true;
   const data = await api("/state");
   syncing = false;
+  lastServerSync = now;
   if(!data || !data.ok) return;
   tasks = data.tasks;
   renderTasks();
@@ -162,7 +161,6 @@ function renderTasks(){
       </td>`;
     tb.appendChild(tr);
 
-    // הגנה על המקלדת
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus",()=>isTyping=true);
       inp.addEventListener("blur",()=>isTyping=false);
@@ -171,15 +169,12 @@ function renderTasks(){
   });
 }
 
-// === פעולות עם עדכון מיידי (כולל סטטוס) ===
 async function action(url){
+  syncing = true; // לעצור זמנית עדכון נוסף
   const id = parseInt(url.split("/").pop());
   const t = tasks.find(x => x.id === id);
   if (t) {
-    if (url.includes("/start/")) {
-      t.status = "running";
-      t.end_time = Date.now() + t.remaining * 1000;
-    }
+    if (url.includes("/start/")) { t.status = "running"; t.end_time = Date.now() + t.remaining*1000; }
     if (url.includes("/pause/")) t.status = "paused";
     if (url.includes("/reset/")) { t.status = "running"; t.remaining = t.duration; }
     if (url.includes("/set_pending/")) t.status = "pending";
@@ -187,10 +182,9 @@ async function action(url){
     if (url.includes("/delete/")) tasks = tasks.filter(x=>x.id!==id);
   }
   renderTasks();
-
-  // עדכון בשרת + סנכרון מהיר
   await api(url,"POST");
-  await syncState();
+  syncing = false;
+  await syncState(true);
 }
 
 async function updateTask(id){
@@ -200,7 +194,7 @@ async function updateTask(id){
   const m=parseInt(row.querySelector(".edit-m").value)||0;
   const s=parseInt(row.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  await syncState();
+  await syncState(true);
 }
 async function extendTask(id){
   const row=$("#row-"+id);
@@ -208,26 +202,26 @@ async function extendTask(id){
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await syncState();
+  await syncState(true);
 }
 async function moveTask(id){
   const row=$("#row-"+id);
   const newPos=parseInt(row.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  await syncState();
+  await syncState(true);
 }
 
-// === הוספת משימה ===
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
   $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  await syncState();
+  await syncState(true);
 };
 
-// === לולאת עדכון כל שנייה ===
+// === לולאת עדכון חלקה ===
 setInterval(()=>{
+  if(syncing) return;
   tasks.forEach(t=>{
     if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
   });
@@ -239,9 +233,8 @@ setInterval(()=>{
   $("#overallEnd").textContent = computeOverallEnd();
 },1000);
 
-// סנכרון מלא מהשרת כל 2 שניות
-setInterval(syncState,2000);
-syncState();
+setInterval(()=>syncState(false),2500);
+syncState(true);
 </script>
 </body>
 </html>
