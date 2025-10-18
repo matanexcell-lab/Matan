@@ -119,7 +119,7 @@ async function syncState(force=false){
   renderTasks();
 }
 
-/* ✅ חישוב נכון של שעות התחלה/סיום */
+/* ✅ חישוב יציב של שעות התחלה/סיום */
 function computeTimes(){
   const now = Date.now();
   const n = tasks.length;
@@ -130,8 +130,11 @@ function computeTimes(){
     let base = now;
     for (let i = 0; i < n; i++) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
-      tasks[i].start_time_ms = base;
-      tasks[i].end_time_ms   = base + dur;
+      // נשמור רק פעם ראשונה
+      if (!tasks[i].start_time_ms || !tasks[i].end_time_ms) {
+        tasks[i].start_time_ms = base;
+        tasks[i].end_time_ms   = base + dur;
+      }
       base = tasks[i].end_time_ms;
     }
     return;
@@ -140,29 +143,32 @@ function computeTimes(){
   // יש משימה פעילה
   const run = tasks[r];
   const elapsed = Math.max(0, run.duration - run.remaining);
-  run.start_time_ms = now - elapsed * 1000;
+  run.start_time_ms = run.start_time_ms || (now - elapsed * 1000);
   run.end_time_ms   = now + run.remaining * 1000;
 
   // משימות לפני
   let endMs = run.start_time_ms;
   for (let i = r - 1; i >= 0; i--) {
     const dur = Math.max(0, tasks[i].remaining) * 1000;
-    tasks[i].end_time_ms   = endMs;
-    tasks[i].start_time_ms = endMs - dur;
+    if (!tasks[i].start_time_ms || !tasks[i].end_time_ms) {
+      tasks[i].end_time_ms   = endMs;
+      tasks[i].start_time_ms = endMs - dur;
+    }
     endMs = tasks[i].start_time_ms;
   }
 
-  // משימות אחרי
+  // משימות אחרי — קבועות, לא נעדכן בכל פעם
   let startMs = run.end_time_ms;
   for (let i = r + 1; i < n; i++) {
     const dur = Math.max(0, tasks[i].remaining) * 1000;
-    tasks[i].start_time_ms = startMs;
-    tasks[i].end_time_ms   = startMs + dur;
+    if (!tasks[i].start_time_ms || !tasks[i].end_time_ms) {
+      tasks[i].start_time_ms = startMs;
+      tasks[i].end_time_ms   = startMs + dur;
+    }
     startMs = tasks[i].end_time_ms;
   }
 }
 
-/* ✅ רינדור משימות */
 function renderTasks(){
   if(isTyping) return;
   computeTimes();
@@ -214,7 +220,6 @@ function renderTasks(){
       </td>`;
     tb.appendChild(tr);
 
-    // ✅ תיקון בעיית המקלדת
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focusin", ()=>isTyping=true);
       inp.addEventListener("focusout", ()=>isTyping=false);
@@ -226,7 +231,7 @@ async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
-    if(url.includes("/start/")) t.status="running";
+    if(url.includes("/start/")) { t.status="running"; t.start_time_ms=null; t.end_time_ms=null; }
     if(url.includes("/pause/")) t.status="paused";
     if(url.includes("/set_pending/")) t.status="pending";
     if(url.includes("/skip/")) t.status="done";
