@@ -1,7 +1,7 @@
-#requirements.txt
-
 Flask
 gunicorn
 sqlalchemy
 psycopg2-binary
 pytz
+flask-socketio
+eventlet
