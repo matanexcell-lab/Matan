@@ -17,32 +17,24 @@
     .paused  { background:#fff0b3; }
     .pending { background:#f2f2f2; }
     .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
-    .actions button { margin: 0 2px; }
-    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid, .extend-grid, .move-grid {
-      display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
-    }
-    .toolbar { text-align:center; margin-bottom:12px }
     button { cursor:pointer; }
+    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
   </style>
 </head>
 <body>
 
 <h1>⏱️ טיימר משימות</h1>
 
-<div class="toolbar">
-  <span id="now" class="muted"></span><br/>
-  <strong>שעת סיום כוללת:</strong> <span id="overallEnd">-</span>
+<div style="text-align:center">
+  <div id="now" class="muted"></div>
+  <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span>
 </div>
 
-<!-- הוספת משימה -->
-<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-bottom:10px">
-  <label>שם משימה חדשה
-    <input id="newName" type="text" placeholder="שם משימה">
-  </label>
-  <label>שעות <input id="newH" type="number" min="0" value="0"></label>
-  <label>דקות <input id="newM" type="number" min="0" value="0"></label>
-  <label>שניות <input id="newS" type="number" min="0" value="0"></label>
+<div style="text-align:center;margin:10px 0">
+  <input id="newName" type="text" placeholder="שם משימה">
+  <input id="newH" type="number" min="0" value="0"> שעות
+  <input id="newM" type="number" min="0" value="0"> דקות
+  <input id="newS" type="number" min="0" value="0"> שניות
   <button id="btnAdd">➕ הוסף</button>
 </div>
 
@@ -51,13 +43,9 @@
   <tr>
     <th>#</th>
     <th>שם</th>
-    <th>זמן התחלתי</th>
-    <th>זמן נותר</th>
+    <th>נותר</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
-    <th>עריכה</th>
-    <th>הארכה</th>
-    <th>העברה</th>
     <th>פעולות</th>
   </tr>
   </thead>
@@ -66,155 +54,89 @@
 
 <script>
 const $ = s => document.querySelector(s);
-let isEditing = false;
-let lastRender = 0;
-const RENDER_INTERVAL = 1000; // כל שנייה
+let tasks = [];
+let fetching = false;
+let lastUpdate = Date.now();
 
-function fmtHHMMSS(totalSeconds){
-  totalSeconds = Math.max(0, parseInt(totalSeconds||0,10));
-  const h=Math.floor(totalSeconds/3600);
-  const m=Math.floor((totalSeconds%3600)/60);
-  const s=totalSeconds%60;
-  return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+function fmt(t){t=Math.max(0,parseInt(t));let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;}
+function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
+
+async function api(url, method="GET", body=null, timeout=2000){
+  const ctrl = new AbortController();
+  const id = setTimeout(()=>ctrl.abort(), timeout);
+  try {
+    const res = await fetch(url, {method, headers:{'Content-Type':'application/json'}, body: body?JSON.stringify(body):null, signal:ctrl.signal});
+    clearTimeout(id);
+    return await res.json();
+  } catch { return null; }
 }
 
-async function api(url, method="GET", body=null){
-  const opt={method,headers:{"Content-Type":"application/json"}};
-  if(body) opt.body=JSON.stringify(body);
-  const res=await fetch(url,opt);
-  if(!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-async function addTask(){
-  const name=$("#newName").value.trim();
-  const h=parseInt($("#newH").value||"0");
-  const m=parseInt($("#newM").value||"0");
-  const s=parseInt($("#newS").value||"0");
-  await api("/add","POST",{name,hours:h,minutes:m,seconds:s});
-  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  await render(true);
-}
-
-async function startTask(id){await api(`/start/${id}`,"POST");await render(true);}
-async function pauseTask(id){await api(`/pause/${id}`,"POST");await render(true);}
-async function resetTask(id){await api(`/reset/${id}`,"POST");await render(true);}
-async function deleteTask(id){await api(`/delete/${id}`,"POST");await render(true);}
-async function setPending(id){await api(`/set_pending/${id}`,"POST");await render(true);}
-async function skipToNext(id){await api(`/skip/${id}`,"POST");await render(true);}
-async function extendTask(id){
-  const r=document.getElementById(`row-${id}`);
-  const h=parseInt(r.querySelector(".ext-h").value||"0");
-  const m=parseInt(r.querySelector(".ext-m").value||"0");
-  const s=parseInt(r.querySelector(".ext-s").value||"0");
-  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await render(true);
-}
-async function saveEdit(id){
-  const r=document.getElementById(`row-${id}`);
-  const nm=r.querySelector(".edit-name").value;
-  const h=parseInt(r.querySelector(".edit-h").value||"0");
-  const m=parseInt(r.querySelector(".edit-m").value||"0");
-  const s=parseInt(r.querySelector(".edit-s").value||"0");
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-}
-
-async function moveTask(id){
-  const r=document.getElementById(`row-${id}`);
-  const newPos=parseInt(r.querySelector(".move-to").value||"0");
-  if(newPos<1) return;
-  await api(`/reorder_single`,"POST",{task_id:id,new_position:newPos});
-  await render(true);
-}
-
-function badgeClass(st){
-  if(st==="running") return "badge running";
-  if(st==="paused") return "badge paused";
-  if(st==="pending") return "badge pending";
-  return "badge done";
-}
-
-function attachFocusGuards(el){
-  el.querySelectorAll("input,textarea").forEach(inp=>{
-    inp.addEventListener("focus",()=>isEditing=true);
-    inp.addEventListener("blur",()=>setTimeout(()=>isEditing=false,300));
-    inp.addEventListener("touchstart",()=>isEditing=true,{passive:true});
-  });
-}
-
-async function render(force=false){
-  const nowTs = Date.now();
-  if(!force && nowTs - lastRender < RENDER_INTERVAL) return;
-  if(isEditing) return;
-  lastRender = nowTs;
-
+async function safeFetchState(){
+  if(fetching) return;
+  fetching = true;
   const data = await api("/state");
-  $("#overallEnd").textContent = data.overall_end_time || "-";
-  $("#now").textContent = data.now || "";
+  fetching = false;
+  if(!data || !data.ok) return;
+  tasks = data.tasks;
+  $("#overallEnd").textContent = data.overall_end_time;
+  $("#now").textContent = data.now;
+  renderTasks();
+}
 
+function renderTasks(){
   const tb=$("#tbody");
   tb.innerHTML="";
-  data.tasks.forEach((t,idx)=>{
-    const canEdit=t.status!=="running";
+  tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
-    tr.id=`row-${t.id}`;
     tr.className=t.status;
     tr.innerHTML=`
-      <td>${idx+1}</td>
-      <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
-      <td class="muted">${fmtHHMMSS(t.duration)}</td>
-      <td><strong>${t.remaining_hhmmss}</strong></td>
+      <td>${i+1}</td>
+      <td>${t.name}</td>
+      <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
       <td>${t.end_time_str||"-"}</td>
-      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
-      <td>
-        <div class="edit-grid">
-          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>
-          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>
-          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
-          <button ${canEdit?"":"disabled"} onclick="saveEdit(${t.id})">עדכן</button>
-        </div>
-      </td>
-      <td>
-        <div class="extend-grid">
-          <input class="ext-h" type="number" min="0" value="0">
-          <input class="ext-m" type="number" min="0" value="0">
-          <input class="ext-s" type="number" min="0" value="0">
-          <button onclick="extendTask(${t.id})">הארך</button>
-        </div>
-      </td>
-      <td>
-        <div class="move-grid">
-          <input class="move-to" type="number" min="1" value="${idx+1}">
-          <button onclick="moveTask(${t.id})">העבר</button>
-        </div>
-      </td>
-      <td>
-        <div class="row-actions">
-          <button onclick="startTask(${t.id})">התחל</button>
-          <button onclick="pauseTask(${t.id})">השהה</button>
-          <button onclick="resetTask(${t.id})">איפוס</button>
-          <button onclick="setPending(${t.id})">ל-Pending</button>
-          <button onclick="skipToNext(${t.id})">דלג לבאה</button>
-          <button onclick="deleteTask(${t.id})">מחק</button>
-        </div>
+      <td><span class="${badge(t.status)}">${t.status}</span></td>
+      <td class="row-actions">
+        <button onclick="act('/start/${t.id}')">התחל</button>
+        <button onclick="act('/pause/${t.id}')">השהה</button>
+        <button onclick="act('/reset/${t.id}')">איפוס</button>
+        <button onclick="act('/set_pending/${t.id}')">Pending</button>
+        <button onclick="act('/skip/${t.id}')">דלג</button>
+        <button onclick="act('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
-    attachFocusGuards(tr);
   });
 }
 
-// רענון אוטומטי כל שנייה
-setInterval(()=>render(false).catch(()=>{}),RENDER_INTERVAL);
+async function act(url){
+  api(url,"POST"); // לא מחכה לתשובה
+  safeFetchState(); // רענון רך
+}
 
-// רינדור ראשון
-render(true);
-document.getElementById("btnAdd").addEventListener("click",addTask);
-["newName","newH","newM","newS"].forEach(id=>{
-  const el=document.getElementById(id);
-  el.addEventListener("focus",()=>isEditing=true);
-  el.addEventListener("blur",()=>setTimeout(()=>isEditing=false,300));
-  el.addEventListener("touchstart",()=>isEditing=true,{passive:true});
-});
+$("#btnAdd").onclick=async()=>{
+  const n=$("#newName").value.trim()||"משימה חדשה";
+  const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
+  await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
+  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
+  safeFetchState();
+};
+
+// עדכון שניות ברקע (מקומי)
+setInterval(()=>{
+  tasks.forEach(t=>{
+    if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
+  });
+  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
+  const rems=document.querySelectorAll(".remain");
+  rems.forEach(span=>{
+    const id=parseInt(span.dataset.id);
+    const t=tasks.find(x=>x.id===id);
+    if(t) span.textContent=fmt(t.remaining);
+  });
+},1000);
+
+// פולינג מהשרת כל 3 שניות
+setInterval(safeFetchState,3000);
+safeFetchState();
 </script>
 </body>
 </html>
