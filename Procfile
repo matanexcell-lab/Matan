@@ -1,1 +1,1 @@
-web: gunicorn Main:app --threads 4
+web: gunicorn -k eventlet -w 1 main:app
