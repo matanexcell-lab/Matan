@@ -22,7 +22,6 @@
     .edit-grid, .extend-grid, .move-grid {
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
-    tr { transition: background-color 0.4s ease; }
   </style>
 </head>
 <body>
@@ -67,12 +66,8 @@ let tasks = [];
 let syncing = false;
 let isTyping = false;
 let lastServerSync = 0;
-
-const tzFmt = new Intl.DateTimeFormat('he-IL', {
-  timeZone: 'Asia/Jerusalem',
-  hour12: false,
-  hour: '2-digit', minute: '2-digit', second: '2-digit'
-});
+let isFrozen = false; // מצב קפוא
+const tzFmt = new Intl.DateTimeFormat('he-IL',{timeZone:'Asia/Jerusalem',hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
 function fmt(t){
   t=Math.max(0,parseInt(t));
@@ -86,29 +81,32 @@ function badgeClass(st){
   return 'badge done';
 }
 
-function computeOverallEnd() {
+function checkFrozen(){
+  isFrozen = tasks.some(t => t.status === "running");
+}
+
+function computeOverallEnd(){
   const nowMs = Date.now();
   let total = 0;
-  for (const t of tasks) {
-    if (["running","paused","pending"].includes(t.status))
-      total += t.remaining;
+  for(const t of tasks){
+    if(["running","paused","pending"].includes(t.status)) total += t.remaining;
   }
-  if (total === 0) return "-";
-  const end = new Date(nowMs + total * 1000);
+  if(total===0) return "-";
+  const end = new Date(nowMs + total*1000);
   return tzFmt.format(end);
 }
 
 async function api(url, method="GET", body=null){
   try{
-    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
+    const res = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
     return await res.json();
   }catch{return null;}
 }
 
 async function syncState(force=false){
   const now = Date.now();
-  if (syncing || isTyping) return;
-  if (!force && now - lastServerSync < 2000) return;
+  if(syncing || isTyping) return;
+  if(!force && now - lastServerSync < 2000) return;
   syncing = true;
   const data = await api("/state");
   syncing = false;
@@ -118,29 +116,34 @@ async function syncState(force=false){
   renderTasks();
 }
 
-// 🟢 נוסיף גם "שעת התחלה" לכל משימה
 function renderTasks(){
   if(isTyping) return;
-  const tb=$("#tbody");
-  tb.innerHTML="";
-
-  let nowMs = Date.now();
-  let cumulative = nowMs;
+  checkFrozen(); // בודק אם יש משימה פעילה
+  const tb = $("#tbody");
+  tb.innerHTML = "";
+  const nowMs = Date.now();
+  let cumulativeMs = nowMs;
 
   tasks.forEach((t,i)=>{
-    const startTime = new Date(cumulative);
-    cumulative += (t.remaining * 1000);
-    const endTime = new Date(cumulative);
+    // אם יש משימה פעילה — לא נחשב מחדש
+    const startMs = isFrozen ? t._startMs || nowMs : cumulativeMs;
+    const endMs   = startMs + (Math.max(0, t.remaining) * 1000);
 
-    const startStr = tzFmt.format(startTime);
-    const endStr = tzFmt.format(endTime);
+    // שומרים בזיכרון המקומי כדי שיישארו כשהקפאה
+    t._startMs = startMs;
+    t._endMs   = endMs;
 
-    const tr=document.createElement("tr");
-    tr.id="row-"+t.id;
-    tr.className=t.status;
-    const canEdit=(t.status!=="running");
+    if(!isFrozen) cumulativeMs = endMs; // ממשיך רק אם לא קפוא
 
-    tr.innerHTML=`
+    const startStr = tzFmt.format(new Date(startMs));
+    const endStr   = tzFmt.format(new Date(endMs));
+
+    const tr = document.createElement("tr");
+    tr.id = "row-"+t.id;
+    tr.className = t.status;
+    const canEdit = (t.status!=="running");
+
+    tr.innerHTML = `
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
@@ -187,36 +190,12 @@ function renderTasks(){
   });
 }
 
-function updateRowStatus(id, status) {
-  const row = document.getElementById(`row-${id}`);
-  if (!row) return;
-  row.className = status;
-  const badge = row.querySelector("td:nth-child(6) span");
-  if (badge) {
-    badge.className = badgeClass(status);
-    badge.textContent = status;
-  }
-}
-
 async function action(url){
   syncing = true;
-  const id = parseInt(url.split("/").pop());
-  const t = tasks.find(x => x.id === id);
-  if (t) {
-    if (url.includes("/start/")) { t.status = "running"; t.end_time = Date.now() + t.remaining*1000; }
-    if (url.includes("/pause/")) t.status = "paused";
-    if (url.includes("/reset/")) { t.status = "running"; t.remaining = t.duration; }
-    if (url.includes("/set_pending/")) t.status = "pending";
-    if (url.includes("/skip/")) t.status = "done";
-    if (url.includes("/delete/")) tasks = tasks.filter(x=>x.id!==id);
-    updateRowStatus(id, t.status);
-  }
-
   await api(url,"POST");
   syncing = false;
   await syncState(true);
 }
-
 async function updateTask(id){
   const row=$("#row-"+id);
   const nm=row.querySelector(".edit-name").value;
@@ -240,7 +219,6 @@ async function moveTask(id){
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
   await syncState(true);
 }
-
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
@@ -259,8 +237,8 @@ setInterval(()=>{
     if(t) span.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent = computeOverallEnd();
-  renderTasks(); // 🟢 רענון שעת התחלה+סיום בזמן אמת
+  $("#overallEnd").textContent=computeOverallEnd();
+  renderTasks();
 },1000);
 
 setInterval(()=>syncState(false),2500);
