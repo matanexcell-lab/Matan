@@ -49,6 +49,7 @@
     <th>#</th>
     <th>שם</th>
     <th>נותר</th>
+    <th>שעת התחלה</th>
     <th>שעת סיום</th>
     <th>סטטוס</th>
     <th>עריכה</th>
@@ -117,7 +118,7 @@ async function syncState(force=false){
   renderTasks();
 }
 
-// 🟢 כאן נוסיף חישוב לשעת סיום של כל משימה
+// 🟢 נוסיף גם "שעת התחלה" לכל משימה
 function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
@@ -127,8 +128,11 @@ function renderTasks(){
   let cumulative = nowMs;
 
   tasks.forEach((t,i)=>{
+    const startTime = new Date(cumulative);
     cumulative += (t.remaining * 1000);
     const endTime = new Date(cumulative);
+
+    const startStr = tzFmt.format(startTime);
     const endStr = tzFmt.format(endTime);
 
     const tr=document.createElement("tr");
@@ -140,6 +144,7 @@ function renderTasks(){
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
+      <td>${startStr}</td>
       <td>${endStr}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
@@ -186,7 +191,7 @@ function updateRowStatus(id, status) {
   const row = document.getElementById(`row-${id}`);
   if (!row) return;
   row.className = status;
-  const badge = row.querySelector("td:nth-child(5) span");
+  const badge = row.querySelector("td:nth-child(6) span");
   if (badge) {
     badge.className = badgeClass(status);
     badge.textContent = status;
@@ -255,7 +260,7 @@ setInterval(()=>{
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent = computeOverallEnd();
-  renderTasks(); // 🟢 רענון קל של שעת הסיום בכל שנייה
+  renderTasks(); // 🟢 רענון שעת התחלה+סיום בזמן אמת
 },1000);
 
 setInterval(()=>syncState(false),2500);
