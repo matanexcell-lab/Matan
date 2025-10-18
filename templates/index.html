@@ -10,24 +10,20 @@
   table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
   th, td { border: 1px solid #999; padding: 6px; text-align: center; }
   input[type="number"] { width: 64px; }
-  input[type="text"] { width: 180px; }
+  input[type="text"] { width: 160px; }
   .muted { color: #777; font-size: 12px; }
   .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-  .running { background:#d9ffd9; }
-  .paused  { background:#fff0b3; }
-  .pending { background:#f2f2f2; }
-  .done    { background:#e6e6e6; color:#666; text-decoration: line-through; }
+  .running { background:#d9ffd9; transition: background-color 0.4s ease; }
+  .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
+  .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
+  .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
   button { cursor:pointer; }
   .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-  .edit-grid, .extend-grid, .move-grid {
-    display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
-  }
 </style>
 </head>
 <body>
 
 <h1>⏱️ טיימר משימות</h1>
-
 <div style="text-align:center;margin-bottom:10px">
   <div id="now" class="muted"></div>
   <b>סה״כ זמן עבודה:</b> <span id="totalWork">00:00:00</span><br>
@@ -47,15 +43,10 @@
   <thead>
     <tr>
       <th>#</th>
+      <th>עבודה</th>
       <th>שם</th>
-      <th>עבודה</th> <!-- ✅ חדש -->
       <th>נותר</th>
-      <th>שעת התחלה</th>
-      <th>שעת סיום</th>
       <th>סטטוס</th>
-      <th>עריכה</th>
-      <th>הארכה</th>
-      <th>העברה</th>
       <th>פעולות</th>
     </tr>
   </thead>
@@ -67,38 +58,28 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 
-const tzFmt = new Intl.DateTimeFormat('he-IL', {
-  timeZone: 'Asia/Jerusalem',
-  hour12: false,
-  hour: '2-digit', minute: '2-digit', second: '2-digit'
-});
-
 function fmt(t){
   t=Math.max(0,parseInt(t));
   let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
   return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
 }
 
-async function api(url, method="GET", body=null){
-  try{
-    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
-    return await res.json();
-  }catch{return null;}
+async function api(url,method="GET",body=null){
+  const opt={method,headers:{"Content-Type":"application/json"}};
+  if(body) opt.body=JSON.stringify(body);
+  const res=await fetch(url,opt);
+  return res.json();
 }
 
 async function syncState(){
-  if(syncing) return;
-  syncing = true;
-  const data = await api("/state");
-  syncing = false;
-  if(!data || !data.ok) return;
-  tasks = data.tasks;
-  $("#now").textContent = data.now;
-  $("#totalWork").textContent = data.total_work_time;
-  renderTasks();
+  const data=await api("/state");
+  if(!data.ok) return;
+  tasks=data.tasks;
+  $("#totalWork").textContent=data.total_work;
+  render();
 }
 
-function renderTasks(){
+function render(){
   const tb=$("#tbody");
   tb.innerHTML="";
   tasks.forEach((t,i)=>{
@@ -106,27 +87,26 @@ function renderTasks(){
     tr.className=t.status;
     tr.innerHTML=`
       <td>${i+1}</td>
+      <td><input type="checkbox" ${t.is_work?"checked":""} onchange="toggleWork(${t.id},this.checked)"></td>
       <td>${t.name}</td>
-      <td><input type="checkbox" ${t.is_work?'checked':''} onchange="toggleWork(${t.id})"></td>
       <td>${fmt(t.remaining)}</td>
-      <td>-</td>
-      <td>${t.end_time_str||"-"}</td>
       <td>${t.status}</td>
-      <td>—</td>
-      <td>—</td>
-      <td>—</td>
-      <td><button onclick="action('/delete/${t.id}')">מחק</button></td>`;
+      <td>
+        <button onclick="action('/start/${t.id}')">התחל</button>
+        <button onclick="action('/pause/${t.id}')">השהה</button>
+        <button onclick="action('/reset/${t.id}')">איפוס</button>
+        <button onclick="action('/delete/${t.id}')">מחק</button>
+      </td>`;
     tb.appendChild(tr);
   });
 }
 
-async function toggleWork(id){
-  await api(`/toggle_work/${id}`,"POST");
-  await syncState();
-}
-
 async function action(url){
   await api(url,"POST");
+  await syncState();
+}
+async function toggleWork(id,checked){
+  await api(`/update_work/${id}`,"POST",{is_work:checked});
   await syncState();
 }
 
@@ -138,7 +118,8 @@ $("#btnAdd").onclick=async()=>{
   await syncState();
 };
 
-setInterval(syncState,2500);
+setInterval(()=>$("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false}),1000);
+setInterval(syncState,3000);
 syncState();
 </script>
 </body>
