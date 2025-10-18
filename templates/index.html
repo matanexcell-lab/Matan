@@ -5,7 +5,7 @@
   <title>⏱️ טיימר משימות</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; transition: background 0.3s ease; }
     h1 { text-align:center; }
     table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
     th, td { border: 1px solid #999; padding: 6px; text-align: center; }
@@ -13,14 +13,19 @@
     input[type="text"] { width: 180px; }
     .muted { color: #777; font-size: 12px; }
     .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; }
-    .paused  { background:#fff0b3; }
-    .pending { background:#f2f2f2; }
-    .done    { background:#e6e6e6; text-decoration: line-through; color:#666; }
+    .running { background:#d9ffd9; transition: background-color 0.5s ease; }
+    .paused  { background:#fff0b3; transition: background-color 0.5s ease; }
+    .pending { background:#f2f2f2; transition: background-color 0.5s ease; }
+    .done    { background:#e6e6e6; text-decoration: line-through; color:#666; transition: background-color 0.5s ease; }
     button { cursor:pointer; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
     .edit-grid, .extend-grid, .move-grid {
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
+    }
+
+    /* ✨ אפקט מעבר צבע כשסטטוס משתנה */
+    tr {
+      transition: background-color 0.5s ease, color 0.5s ease;
     }
   </style>
 </head>
@@ -83,16 +88,11 @@ function badge(st){return st==='running'?'badge running':st==='paused'?'badge pa
 function computeOverallEnd() {
   const nowMs = Date.now();
   let total = 0;
-  let foundRunning = false;
   for (const t of tasks) {
-    if (t.status === "running") {
+    if (["running","paused","pending"].includes(t.status))
       total += t.remaining;
-      foundRunning = true;
-    } else if (t.status === "paused" || t.status === "pending") {
-      total += t.remaining;
-    }
   }
-  if (!foundRunning && total === 0) return "-";
+  if (total === 0) return "-";
   const end = new Date(nowMs + total * 1000);
   return tzFmt.format(end);
 }
@@ -171,17 +171,24 @@ function renderTasks(){
   });
 }
 
-// === פעולות עם עדכון מיידי ===
+// === פעולות עם עדכון מיידי (כולל סטטוס) ===
 async function action(url){
-  // עדכון מיידי בצד הלקוח
   const id = parseInt(url.split("/").pop());
   const t = tasks.find(x => x.id === id);
-  if (t && url.includes("/start/")) t.status = "running";
-  if (t && url.includes("/pause/")) t.status = "paused";
-  if (t && url.includes("/reset/")) t.remaining = t.duration;
+  if (t) {
+    if (url.includes("/start/")) {
+      t.status = "running";
+      t.end_time = Date.now() + t.remaining * 1000;
+    }
+    if (url.includes("/pause/")) t.status = "paused";
+    if (url.includes("/reset/")) { t.status = "running"; t.remaining = t.duration; }
+    if (url.includes("/set_pending/")) t.status = "pending";
+    if (url.includes("/skip/")) t.status = "done";
+    if (url.includes("/delete/")) tasks = tasks.filter(x=>x.id!==id);
+  }
   renderTasks();
 
-  // עדכון בשרת
+  // עדכון בשרת + סנכרון מהיר
   await api(url,"POST");
   await syncState();
 }
