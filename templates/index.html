@@ -66,7 +66,9 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
-let frozen = false; // יש משימה רצה?
+let frozen = false;
+let isTyping = false;
+
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
   hour12: false,
@@ -103,10 +105,6 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-function clearTimesCacheAll(){
-  tasks.forEach(t=>{ delete t.start_time_ms; delete t.end_time_ms; });
-}
-
 async function syncState(force=false){
   const now = Date.now();
   if(syncing) return;
@@ -121,42 +119,52 @@ async function syncState(force=false){
   renderTasks();
 }
 
-/* ===== לוגיקת חישוב זמנים =====
-   - אם יש running: רק לה לרוץ בזמן אמת:
-     start = now - (duration - remaining), end = now + remaining
-     כל השאר – שומרים את הערכים הקודמים (_cache). אם אין – מאותחל מיידית.
-   - אם אין running: מחשבים רצף מלא מהשעה הנוכחית לכל המשימות.
-*/
+/* ✅ חישוב נכון של שעות התחלה/סיום */
 function computeTimes(){
   const now = Date.now();
-  const runIdx = tasks.findIndex(t=>t.status==='running');
+  const n = tasks.length;
+  const r = tasks.findIndex(t => t.status === 'running');
 
-  if (runIdx !== -1) {
-    // עדכון המשימה הרצה
-    const rt = tasks[runIdx];
-    const elapsed = Math.max(0, (rt.duration - rt.remaining)); // שניות שעברו מאז ההתחלה
-    rt.start_time_ms = now - elapsed*1000;
-    rt.end_time_ms   = now + rt.remaining*1000;
+  if (r === -1) {
+    // אין משימה פעילה
+    let base = now;
+    for (let i = 0; i < n; i++) {
+      const dur = Math.max(0, tasks[i].remaining) * 1000;
+      tasks[i].start_time_ms = base;
+      tasks[i].end_time_ms   = base + dur;
+      base = tasks[i].end_time_ms;
+    }
+    return;
+  }
 
-    // שאר המשימות: קפואות – השתמש בערך קיים, ואם אין אז אתחל סביב עכשיו
-    tasks.forEach((t,i)=>{
-      if(i===runIdx) return;
-      if(!t.start_time_ms) t.start_time_ms = now;
-      if(!t.end_time_ms)   t.end_time_ms   = now + t.remaining*1000;
-    });
+  // יש משימה פעילה
+  const run = tasks[r];
+  const elapsed = Math.max(0, run.duration - run.remaining);
+  run.start_time_ms = now - elapsed * 1000;
+  run.end_time_ms   = now + run.remaining * 1000;
 
-  } else {
-    // אין משימה רצה -> רצף מלא
-    let current = now;
-    tasks.forEach(t=>{
-      t.start_time_ms = current;
-      t.end_time_ms   = current + t.remaining*1000;
-      current = t.end_time_ms;
-    });
+  // משימות לפני
+  let endMs = run.start_time_ms;
+  for (let i = r - 1; i >= 0; i--) {
+    const dur = Math.max(0, tasks[i].remaining) * 1000;
+    tasks[i].end_time_ms   = endMs;
+    tasks[i].start_time_ms = endMs - dur;
+    endMs = tasks[i].start_time_ms;
+  }
+
+  // משימות אחרי
+  let startMs = run.end_time_ms;
+  for (let i = r + 1; i < n; i++) {
+    const dur = Math.max(0, tasks[i].remaining) * 1000;
+    tasks[i].start_time_ms = startMs;
+    tasks[i].end_time_ms   = startMs + dur;
+    startMs = tasks[i].end_time_ms;
   }
 }
 
+/* ✅ רינדור משימות */
 function renderTasks(){
+  if(isTyping) return;
   computeTimes();
   const tb=$("#tbody");
   tb.innerHTML="";
@@ -205,20 +213,25 @@ function renderTasks(){
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
+
+    // ✅ תיקון בעיית המקלדת
+    tr.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focusin", ()=>isTyping=true);
+      inp.addEventListener("focusout", ()=>isTyping=false);
+    });
   });
 }
 
 async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
-
   if(t){
-    if(url.includes("/start/")) { t.status="running"; frozen=true; }
-    if(url.includes("/pause/")) { t.status="paused"; frozen=false; clearTimesCacheAll(); }
-    if(url.includes("/reset/")) { t.status="running"; frozen=true; }
-    if(url.includes("/set_pending/")) { t.status="pending"; frozen=false; clearTimesCacheAll(); }
-    if(url.includes("/skip/")) { t.status="done"; frozen=false; clearTimesCacheAll(); }
-    if(url.includes("/delete/")) { tasks=tasks.filter(x=>x.id!==id); frozen = tasks.some(x=>x.status==='running'); clearTimesCacheAll(); }
+    if(url.includes("/start/")) t.status="running";
+    if(url.includes("/pause/")) t.status="paused";
+    if(url.includes("/set_pending/")) t.status="pending";
+    if(url.includes("/skip/")) t.status="done";
+    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
+    frozen = tasks.some(t=>t.status==="running");
     renderTasks();
   }
   await api(url,"POST");
@@ -232,7 +245,6 @@ async function updateTask(id){
   const m=parseInt(row.querySelector(".edit-m").value)||0;
   const s=parseInt(row.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  clearTimesCacheAll();
   await syncState(true);
 }
 async function extendTask(id){
@@ -247,7 +259,6 @@ async function moveTask(id){
   const row=$("#row-"+id);
   const newPos=parseInt(row.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  clearTimesCacheAll();
   await syncState(true);
 }
 $("#btnAdd").onclick=async()=>{
@@ -255,35 +266,27 @@ $("#btnAdd").onclick=async()=>{
   const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
   $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  clearTimesCacheAll();
   await syncState(true);
 };
 
-// === לולאת עדכון חיה ===
+// === עדכון חי כל שנייה ===
 setInterval(()=>{
-  // עדכון נותר רק למשימה שרצה
   const running = tasks.find(t=>t.status==="running");
-  if (running) {
-    running.remaining = Math.max(0, running.remaining-1);
-    if (running.remaining === 0) { running.status = "done"; frozen = false; clearTimesCacheAll(); }
+  if(running){
+    running.remaining = Math.max(0,running.remaining - 1);
+    if(running.remaining === 0) running.status="done";
   }
-
-  // רענון מידע על המסך
   computeTimes();
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
-
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent=computeOverallEnd();
   renderTasks();
 },1000);
 
-// סנכרון רך מהשרת
 setInterval(()=>syncState(false),2500);
-
-// טעינה ראשונה
 syncState(true);
 </script>
 </body>
