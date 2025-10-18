@@ -1,11 +1,74 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="utf-8"/>
+<title>⏱️ טיימר משימות</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
+  h1 { text-align:center; }
+  table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
+  th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+  input[type="number"] { width: 64px; }
+  input[type="text"] { width: 180px; }
+  .muted { color: #777; font-size: 12px; }
+  .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
+  .running { background:#d9ffd9; transition: background-color 0.4s ease; }
+  .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
+  .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
+  .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
+  button { cursor:pointer; }
+  .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
+  .edit-grid, .extend-grid, .move-grid {
+    display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
+  }
+  tr { transition: background-color 0.4s ease; }
+</style>
+</head>
+<body>
+
+<h1>⏱️ טיימר משימות</h1>
+
+<div style="text-align:center;margin-bottom:10px">
+  <div id="now" class="muted"></div>
+  <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span>
+</div>
+
+<!-- הוספת משימה -->
+<div style="text-align:center;margin-bottom:10px">
+  <input id="newName" type="text" placeholder="שם משימה">
+  <input id="newH" type="number" min="0" value="0"> שעות
+  <input id="newM" type="number" min="0" value="0"> דקות
+  <input id="newS" type="number" min="0" value="0"> שניות
+  <button id="btnAdd">➕ הוסף</button>
+</div>
+
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>שם</th>
+      <th>נותר</th>
+      <th>שעת התחלה</th>
+      <th>שעת סיום</th>
+      <th>סטטוס</th>
+      <th>עריכה</th>
+      <th>הארכה</th>
+      <th>העברה</th>
+      <th>פעולות</th>
+    </tr>
+  </thead>
+  <tbody id="tbody"></tbody>
+</table>
+
 <script>
 const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
 let isTyping = false;
-let frozenLayout = null; // שמירת טיימינג קפוא
-let activeTaskId = null; // נעקוב אחרי המשימה הפעילה
+let frozenLayout = null;
+let activeTaskId = null;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -54,20 +117,20 @@ async function syncState(force=false){
   if(!data || !data.ok) return;
   tasks = data.tasks;
 
-  // נשמור layout חדש רק אם אין משימה פעילה
+  // ❄️ לא נחשב זמני התחלה/סיום מחדש אם יש משימה פעילה
   if (!tasks.some(t => t.status === "running"))
     computeTimesOnce();
 
   renderTasks(true);
 }
 
-/* ✅ חישוב שעות פעם אחת בלבד */
+/* ✅ מחשב פעם אחת בלבד זמני התחלה/סיום */
 function computeTimesOnce(){
   const now = Date.now();
   const n = tasks.length;
   const r = tasks.findIndex(t => t.status === 'running');
-
   let layout = [];
+
   if (r === -1) {
     let base = now;
     for (let i = 0; i < n; i++) {
@@ -169,7 +232,6 @@ function renderTasks(fromSync=false){
 async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
-
   if(t){
     if(url.includes("/start/"))  { t.status="running"; activeTaskId=t.id; computeTimesOnce(); }
     if(url.includes("/pause/"))  { t.status="paused"; activeTaskId=null; computeTimesOnce(); }
@@ -178,7 +240,6 @@ async function action(url){
     if(url.includes("/delete/")) { tasks=tasks.filter(x=>x.id!==id); computeTimesOnce(); }
     renderTasks(true);
   }
-
   await api(url,"POST");
   await syncState(true);
 }
@@ -232,3 +293,5 @@ setInterval(()=>{
 setInterval(()=>syncState(false),2500);
 syncState(true);
 </script>
+</body>
+</html>
