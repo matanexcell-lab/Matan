@@ -1,29 +1,29 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <title>⏱️ טיימר משימות</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
-    h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
-    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
-    input[type="number"] { width: 64px; }
-    input[type="text"] { width: 180px; }
-    .muted { color: #777; font-size: 12px; }
-    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; transition: background-color 0.4s ease; }
-    .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
-    .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
-    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
-    button { cursor:pointer; }
-    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid, .extend-grid, .move-grid {
-      display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
-    }
-    tr { transition: background-color 0.4s ease; }
-  </style>
+<meta charset="utf-8"/>
+<title>⏱️ טיימר משימות</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
+  h1 { text-align:center; }
+  table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
+  th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+  input[type="number"] { width: 64px; }
+  input[type="text"] { width: 180px; }
+  .muted { color: #777; font-size: 12px; }
+  .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
+  .running { background:#d9ffd9; transition: background-color 0.4s ease; }
+  .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
+  .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
+  .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
+  button { cursor:pointer; }
+  .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
+  .edit-grid, .extend-grid, .move-grid {
+    display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
+  }
+  tr { transition: background-color 0.4s ease; }
+</style>
 </head>
 <body>
 
@@ -45,18 +45,18 @@
 
 <table>
   <thead>
-  <tr>
-    <th>#</th>
-    <th>שם</th>
-    <th>נותר</th>
-    <th>שעת התחלה</th>
-    <th>שעת סיום</th>
-    <th>סטטוס</th>
-    <th>עריכה</th>
-    <th>הארכה</th>
-    <th>העברה</th>
-    <th>פעולות</th>
-  </tr>
+    <tr>
+      <th>#</th>
+      <th>שם</th>
+      <th>נותר</th>
+      <th>שעת התחלה</th>
+      <th>שעת סיום</th>
+      <th>סטטוס</th>
+      <th>עריכה</th>
+      <th>הארכה</th>
+      <th>העברה</th>
+      <th>פעולות</th>
+    </tr>
   </thead>
   <tbody id="tbody"></tbody>
 </table>
@@ -66,7 +66,7 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
-let frozen = false;
+let frozen = false; // האם יש משימה פעילה
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
   hour12: false,
@@ -84,7 +84,6 @@ function badgeClass(st){
   if(st==='pending') return 'badge pending';
   return 'badge done';
 }
-
 function computeOverallEnd(){
   const nowMs = Date.now();
   let total = 0;
@@ -118,34 +117,38 @@ async function syncState(force=false){
   renderTasks();
 }
 
+// מחשב שעות התחלה וסיום לכל המשימות
+function computeTimes(){
+  const now = Date.now();
+  let current = now;
+  tasks.forEach(t=>{
+    if(!t.start_time_ms) t.start_time_ms = current;
+    if(!t.end_time_ms) t.end_time_ms = current + t.remaining*1000;
+    if(!frozen) { // רק כשאין משימה רצה
+      t.start_time_ms = current;
+      t.end_time_ms = current + t.remaining*1000;
+      current = t.end_time_ms;
+    }
+  });
+}
+
 function renderTasks(){
+  computeTimes();
   const tb=$("#tbody");
   tb.innerHTML="";
-  const nowMs = Date.now();
-  let cumulative = nowMs;
-
   tasks.forEach((t,i)=>{
-    // לחשב שעת התחלה וסיום באופן דינמי
-    if(!frozen){
-      t.start_time = new Date(cumulative);
-      cumulative += t.remaining*1000;
-      t.end_time = new Date(cumulative);
-    } else if(!t.start_time){
-      t.start_time = new Date();
-      t.end_time = new Date(Date.now() + t.remaining*1000);
-    }
-
     const tr=document.createElement("tr");
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-
+    const startStr = tzFmt.format(new Date(t.start_time_ms));
+    const endStr = tzFmt.format(new Date(t.end_time_ms));
     tr.innerHTML=`
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
-      <td>${tzFmt.format(t.start_time)}</td>
-      <td>${tzFmt.format(t.end_time)}</td>
+      <td>${startStr}</td>
+      <td>${endStr}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
@@ -177,7 +180,6 @@ function renderTasks(){
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
-
     tb.appendChild(tr);
   });
 }
@@ -186,7 +188,6 @@ async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
-    // שינוי מקומי מיידי
     if(url.includes("/start/")) {t.status="running"; frozen=true;}
     if(url.includes("/pause/")) {t.status="paused"; frozen=false;}
     if(url.includes("/set_pending/")) {t.status="pending"; frozen=false;}
@@ -229,8 +230,11 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-// לולאת עדכון חיה
+// === לולאת עדכון חיה ===
 setInterval(()=>{
+  if(!frozen){
+    computeTimes(); // מעדכן רצף לכל המשימות
+  }
   tasks.forEach(t=>{
     if(t.status==="running"){
       t.remaining=Math.max(0,t.remaining-1);
