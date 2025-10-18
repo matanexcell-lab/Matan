@@ -1,9 +1,5 @@
-Flask==3.1.0
-Flask-SocketIO==5.3.6
-python-socketio==5.11.3
-python-engineio==4.9.1
-eventlet==0.33.3
-gunicorn==21.2.0
-SQLAlchemy==2.0.44
-psycopg2-binary==2.9.9
-pytz==2025.2
+Flask
+SQLAlchemy
+psycopg2-binary
+pytz
+gunicorn
