@@ -67,7 +67,7 @@ let tasks = [];
 let syncing = false;
 let isTyping = false;
 let lastServerSync = 0;
-let frozen = false; // כשיש משימה פעילה
+let frozen = false;
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
   hour12: false,
@@ -89,8 +89,9 @@ function badgeClass(st){
 function computeOverallEnd(){
   const nowMs = Date.now();
   let total = 0;
-  for(const t of tasks){
-    if(["running","paused","pending"].includes(t.status)) total += t.remaining;
+  for (const t of tasks){
+    if(["running","paused","pending"].includes(t.status))
+      total += t.remaining;
   }
   if(total===0) return "-";
   const end = new Date(nowMs + total*1000);
@@ -127,17 +128,16 @@ function renderTasks(){
   tasks.forEach((t,i)=>{
     let startMs, endMs;
     if(frozen){
-      // אם קפוא — השתמש בערכים השמורים
       startMs = t._startMs || nowMs;
       endMs = t._endMs || (startMs + t.remaining*1000);
     } else {
-      // מחשב מחדש
       startMs = cumulative;
       endMs = startMs + t.remaining*1000;
       t._startMs = startMs;
       t._endMs = endMs;
       cumulative = endMs;
     }
+
     const startStr = tzFmt.format(new Date(startMs));
     const endStr = tzFmt.format(new Date(endMs));
 
@@ -145,6 +145,7 @@ function renderTasks(){
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
+
     tr.innerHTML=`
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
@@ -182,6 +183,7 @@ function renderTasks(){
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
+
     tb.appendChild(tr);
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus",()=>isTyping=true);
@@ -239,6 +241,7 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
+// === עדכון חי כל שנייה ===
 setInterval(()=>{
   if(syncing) return;
   tasks.forEach(t=>{
@@ -250,7 +253,7 @@ setInterval(()=>{
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent=computeOverallEnd();
-  renderTasks(); // מרנדר מחדש תמיד
+  renderTasks();
 },1000);
 
 setInterval(()=>syncState(false),2500);
