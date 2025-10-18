@@ -1,7 +1,7 @@
 Flask
-gunicorn
-sqlalchemy
-psycopg2-binary
-pytz
-flask-socketio
+Flask-SocketIO
 eventlet
+gunicorn
+SQLAlchemy
+pytz
+psycopg2-binary
