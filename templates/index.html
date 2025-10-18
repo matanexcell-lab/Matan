@@ -72,6 +72,44 @@ function fmt(t){
 }
 function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
 
+const tzFmt = new Intl.DateTimeFormat('he-IL', {
+  timeZone: 'Asia/Jerusalem',
+  hour12: false,
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+  day: '2-digit', month: '2-digit', year: 'numeric'
+});
+
+// מחשב לוקאלית את שעת הסיום הכוללת ע"פ מצב המשימות והסדר הנוכחי
+function computeOverallEnd() {
+  const nowMs = Date.now();
+  // מוצאים את האינדקס של המשימה הרצה (אם קיימת)
+  let runningIndex = tasks.findIndex(t => t.status === 'running');
+  let baseMs;
+
+  if (runningIndex >= 0) {
+    // אם יש רצה: הבסיס הוא עכשיו + הזמן שנותר במשימה הרצה
+    baseMs = nowMs + (Math.max(0, tasks[runningIndex].remaining) * 1000);
+    // מוסיפים את כל מה ש"בהמשך התור" שהם pending/paused
+    for (let i = runningIndex + 1; i < tasks.length; i++) {
+      const t = tasks[i];
+      if (t.status === 'pending' || t.status === 'paused') {
+        baseMs += Math.max(0, t.remaining) * 1000;
+      }
+    }
+  } else {
+    // אין משימה רצה: מתחילים מעכשיו ומוסיפים את כל ה-pending/paused לפי הסדר
+    baseMs = nowMs;
+    for (let i = 0; i < tasks.length; i++) {
+      const t = tasks[i];
+      if (t.status === 'pending' || t.status === 'paused') {
+        baseMs += Math.max(0, t.remaining) * 1000;
+      }
+    }
+  }
+
+  return new Date(baseMs);
+}
+
 async function api(url, method="GET", body=null, timeout=2500){
   const ctrl=new AbortController();const id=setTimeout(()=>ctrl.abort(),timeout);
   try{
@@ -89,8 +127,10 @@ async function syncState(){
   syncing=false;
   if(!data||!data.ok) return;
   tasks = data.tasks;
-  $("#overallEnd").textContent = data.overall_end_time;
-  renderTasks();
+  renderTasks();           // מצייר את הטבלה
+  // מעדכן שעת סיום כוללת לפי חישוב לוקאלי כל סינכרון (מיד יקרה גם כל שנייה)
+  const end = computeOverallEnd();
+  $("#overallEnd").textContent = tzFmt.format(end);
 }
 
 // === הצגת משימות ===
@@ -151,7 +191,7 @@ function renderTasks(){
 }
 
 // === פעולות ===
-async function act(url){ api(url,"POST"); setTimeout(syncState,500); }
+async function act(url){ api(url,"POST"); setTimeout(syncState,400); }
 async function updateTask(id){
   const row=document.getElementById("row-"+id);
   const nm=row.querySelector(".edit-name").value;
@@ -185,8 +225,9 @@ $("#btnAdd").onclick=async()=>{
   syncState();
 };
 
-// === עדכון כל שנייה ===
+// === טיק כל שנייה: מעדכן נותר + שעה נוכחית + שעת סיום כוללת לוקאלית ===
 setInterval(()=>{
+  // מעדכן את הזמן הנותר לוגית (ללא רענון DOM מלא)
   tasks.forEach(t=>{
     if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
   });
@@ -194,10 +235,16 @@ setInterval(()=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
+
+  // שעה נוכחית
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
+
+  // חישוב והצגת שעת סיום כוללת בזמן אמת
+  const end = computeOverallEnd();
+  $("#overallEnd").textContent = tzFmt.format(end);
 },1000);
 
-// === סינכרון מהשרת כל 3 שניות ===
+// === סינכרון מהשרת כל 3 שניות (לצמצם עומס) ===
 setInterval(syncState,3000);
 syncState();
 </script>
