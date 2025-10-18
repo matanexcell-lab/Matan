@@ -70,8 +70,7 @@ let lastServerSync = 0;
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
   hour12: false,
-  hour: '2-digit', minute: '2-digit', second: '2-digit',
-  day: '2-digit', month: '2-digit', year: 'numeric'
+  hour: '2-digit', minute: '2-digit', second: '2-digit'
 });
 
 function fmt(t){
@@ -86,7 +85,6 @@ function badgeClass(st){
   return 'badge done';
 }
 
-// חישוב שעת סיום כוללת לוקאלית
 function computeOverallEnd() {
   const nowMs = Date.now();
   let total = 0;
@@ -119,20 +117,30 @@ async function syncState(force=false){
   renderTasks();
 }
 
+// 🟢 כאן נוסיף חישוב לשעת סיום של כל משימה
 function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
+
+  let nowMs = Date.now();
+  let cumulative = nowMs;
+
   tasks.forEach((t,i)=>{
+    cumulative += (t.remaining * 1000);
+    const endTime = new Date(cumulative);
+    const endStr = tzFmt.format(endTime);
+
     const tr=document.createElement("tr");
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
+
     tr.innerHTML=`
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
-      <td>${t.end_time_str||"-"}</td>
+      <td>${endStr}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
@@ -174,7 +182,6 @@ function renderTasks(){
   });
 }
 
-// ✅ פונקציה חדשה — עדכון סטטוס בזמן אמת
 function updateRowStatus(id, status) {
   const row = document.getElementById(`row-${id}`);
   if (!row) return;
@@ -197,8 +204,6 @@ async function action(url){
     if (url.includes("/set_pending/")) t.status = "pending";
     if (url.includes("/skip/")) t.status = "done";
     if (url.includes("/delete/")) tasks = tasks.filter(x=>x.id!==id);
-
-    // ✅ שינוי מיידי בדפדפן
     updateRowStatus(id, t.status);
   }
 
@@ -239,7 +244,6 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-// === לולאת עדכון חלקה ===
 setInterval(()=>{
   if(syncing) return;
   tasks.forEach(t=>{
@@ -251,6 +255,7 @@ setInterval(()=>{
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent = computeOverallEnd();
+  renderTasks(); // 🟢 רענון קל של שעת הסיום בכל שנייה
 },1000);
 
 setInterval(()=>syncState(false),2500);
