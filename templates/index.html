@@ -62,8 +62,8 @@
 <script>
 const $ = s => document.querySelector(s);
 let tasks = [];
-let lastSync = 0;
 let syncing = false;
+let isTyping = false;
 
 function fmt(t){
   t=Math.max(0,parseInt(t));
@@ -83,7 +83,7 @@ async function api(url, method="GET", body=null, timeout=2500){
 
 // === סינכרון עדין מהשרת ===
 async function syncState(){
-  if(syncing) return;
+  if(syncing || isTyping) return;  // לא נרנדר כשמקלידים
   syncing=true;
   const data = await api("/state");
   syncing=false;
@@ -95,10 +95,12 @@ async function syncState(){
 
 // === הצגת משימות ===
 function renderTasks(){
+  if(isTyping) return; // לא נרנדר אם יש פוקוס על שדה
   const tb=$("#tbody");
   tb.innerHTML="";
   tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
+    tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
     tr.innerHTML=`
@@ -138,15 +140,20 @@ function renderTasks(){
         <button onclick="act('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
+
+    // מניעת סגירת מקלדת
+    tr.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focus",()=>isTyping=true);
+      inp.addEventListener("blur",()=>isTyping=false);
+      inp.addEventListener("touchstart",()=>isTyping=true,{passive:true});
+    });
   });
 }
 
 // === פעולות ===
 async function act(url){ api(url,"POST"); setTimeout(syncState,500); }
 async function updateTask(id){
-  const r=$("#row-"+id)||document.getElementById(`row-${id}`);
-  const row=document.getElementById(`row-${id}`)||document.querySelector(`[data-id='${id}']`)?.closest("tr");
-  if(!row)return;
+  const row=document.getElementById("row-"+id);
   const nm=row.querySelector(".edit-name").value;
   const h=parseInt(row.querySelector(".edit-h").value)||0;
   const m=parseInt(row.querySelector(".edit-m").value)||0;
@@ -155,8 +162,7 @@ async function updateTask(id){
   syncState();
 }
 async function extendTask(id){
-  const row=document.getElementById(`row-${id}`)||document.querySelector(`[data-id='${id}']`)?.closest("tr");
-  if(!row)return;
+  const row=document.getElementById("row-"+id);
   const h=parseInt(row.querySelector(".ext-h").value)||0;
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
@@ -164,8 +170,7 @@ async function extendTask(id){
   syncState();
 }
 async function moveTask(id){
-  const row=document.getElementById(`row-${id}`)||document.querySelector(`[data-id='${id}']`)?.closest("tr");
-  if(!row)return;
+  const row=document.getElementById("row-"+id);
   const newPos=parseInt(row.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
   syncState();
@@ -180,15 +185,13 @@ $("#btnAdd").onclick=async()=>{
   syncState();
 };
 
-// === עדכון כל שנייה (זמן ריצה) ===
+// === עדכון כל שנייה ===
 setInterval(()=>{
   tasks.forEach(t=>{
     if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
   });
-  const rems=document.querySelectorAll(".remain");
-  rems.forEach(span=>{
-    const id=parseInt(span.dataset.id);
-    const t=tasks.find(x=>x.id===id);
+  document.querySelectorAll(".remain").forEach(span=>{
+    const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
