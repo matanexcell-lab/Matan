@@ -79,7 +79,12 @@ function fmt(t){
   let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
   return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
 }
-function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
+function badgeClass(st){
+  if(st==='running') return 'badge running';
+  if(st==='paused') return 'badge paused';
+  if(st==='pending') return 'badge pending';
+  return 'badge done';
+}
 
 // חישוב שעת סיום כוללת לוקאלית
 function computeOverallEnd() {
@@ -128,7 +133,7 @@ function renderTasks(){
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
       <td>${t.end_time_str||"-"}</td>
-      <td><span class="${badge(t.status)}">${t.status}</span></td>
+      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
           <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
@@ -169,8 +174,20 @@ function renderTasks(){
   });
 }
 
+// ✅ פונקציה חדשה — עדכון סטטוס בזמן אמת
+function updateRowStatus(id, status) {
+  const row = document.getElementById(`row-${id}`);
+  if (!row) return;
+  row.className = status;
+  const badge = row.querySelector("td:nth-child(5) span");
+  if (badge) {
+    badge.className = badgeClass(status);
+    badge.textContent = status;
+  }
+}
+
 async function action(url){
-  syncing = true; // לעצור זמנית עדכון נוסף
+  syncing = true;
   const id = parseInt(url.split("/").pop());
   const t = tasks.find(x => x.id === id);
   if (t) {
@@ -180,8 +197,11 @@ async function action(url){
     if (url.includes("/set_pending/")) t.status = "pending";
     if (url.includes("/skip/")) t.status = "done";
     if (url.includes("/delete/")) tasks = tasks.filter(x=>x.id!==id);
+
+    // ✅ שינוי מיידי בדפדפן
+    updateRowStatus(id, t.status);
   }
-  renderTasks();
+
   await api(url,"POST");
   syncing = false;
   await syncState(true);
