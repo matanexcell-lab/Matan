@@ -22,6 +22,7 @@
     .edit-grid, .extend-grid, .move-grid {
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
+    tr { transition: background-color 0.4s ease; }
   </style>
 </head>
 <body>
@@ -66,8 +67,12 @@ let tasks = [];
 let syncing = false;
 let isTyping = false;
 let lastServerSync = 0;
-let isFrozen = false; // מצב קפוא
-const tzFmt = new Intl.DateTimeFormat('he-IL',{timeZone:'Asia/Jerusalem',hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+let frozen = false; // כשיש משימה פעילה
+const tzFmt = new Intl.DateTimeFormat('he-IL', {
+  timeZone: 'Asia/Jerusalem',
+  hour12: false,
+  hour: '2-digit', minute: '2-digit', second: '2-digit'
+});
 
 function fmt(t){
   t=Math.max(0,parseInt(t));
@@ -79,10 +84,6 @@ function badgeClass(st){
   if(st==='paused') return 'badge paused';
   if(st==='pending') return 'badge pending';
   return 'badge done';
-}
-
-function checkFrozen(){
-  isFrozen = tasks.some(t => t.status === "running");
 }
 
 function computeOverallEnd(){
@@ -98,7 +99,7 @@ function computeOverallEnd(){
 
 async function api(url, method="GET", body=null){
   try{
-    const res = await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
+    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
     return await res.json();
   }catch{return null;}
 }
@@ -113,37 +114,38 @@ async function syncState(force=false){
   lastServerSync = now;
   if(!data || !data.ok) return;
   tasks = data.tasks;
+  frozen = tasks.some(t=>t.status==="running");
   renderTasks();
 }
 
 function renderTasks(){
   if(isTyping) return;
-  checkFrozen(); // בודק אם יש משימה פעילה
-  const tb = $("#tbody");
-  tb.innerHTML = "";
+  const tb=$("#tbody");
+  tb.innerHTML="";
   const nowMs = Date.now();
-  let cumulativeMs = nowMs;
-
+  let cumulative = nowMs;
   tasks.forEach((t,i)=>{
-    // אם יש משימה פעילה — לא נחשב מחדש
-    const startMs = isFrozen ? t._startMs || nowMs : cumulativeMs;
-    const endMs   = startMs + (Math.max(0, t.remaining) * 1000);
-
-    // שומרים בזיכרון המקומי כדי שיישארו כשהקפאה
-    t._startMs = startMs;
-    t._endMs   = endMs;
-
-    if(!isFrozen) cumulativeMs = endMs; // ממשיך רק אם לא קפוא
-
+    let startMs, endMs;
+    if(frozen){
+      // אם קפוא — השתמש בערכים השמורים
+      startMs = t._startMs || nowMs;
+      endMs = t._endMs || (startMs + t.remaining*1000);
+    } else {
+      // מחשב מחדש
+      startMs = cumulative;
+      endMs = startMs + t.remaining*1000;
+      t._startMs = startMs;
+      t._endMs = endMs;
+      cumulative = endMs;
+    }
     const startStr = tzFmt.format(new Date(startMs));
-    const endStr   = tzFmt.format(new Date(endMs));
+    const endStr = tzFmt.format(new Date(endMs));
 
-    const tr = document.createElement("tr");
-    tr.id = "row-"+t.id;
-    tr.className = t.status;
-    const canEdit = (t.status!=="running");
-
-    tr.innerHTML = `
+    const tr=document.createElement("tr");
+    tr.id="row-"+t.id;
+    tr.className=t.status;
+    const canEdit=(t.status!=="running");
+    tr.innerHTML=`
       <td>${i+1}</td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
@@ -181,7 +183,6 @@ function renderTasks(){
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
-
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus",()=>isTyping=true);
       inp.addEventListener("blur",()=>isTyping=false);
@@ -191,11 +192,22 @@ function renderTasks(){
 }
 
 async function action(url){
-  syncing = true;
+  syncing=true;
+  const id=parseInt(url.split("/").pop());
+  const t=tasks.find(x=>x.id===id);
+  if(t){
+    if(url.includes("/start/")) {t.status="running"; frozen=true;}
+    if(url.includes("/pause/")) {t.status="paused"; frozen=false;}
+    if(url.includes("/reset/")) t.remaining=t.duration;
+    if(url.includes("/set_pending/")) t.status="pending";
+    if(url.includes("/skip/")) t.status="done";
+    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
+  }
   await api(url,"POST");
-  syncing = false;
+  syncing=false;
   await syncState(true);
 }
+
 async function updateTask(id){
   const row=$("#row-"+id);
   const nm=row.querySelector(".edit-name").value;
@@ -238,7 +250,7 @@ setInterval(()=>{
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent=computeOverallEnd();
-  renderTasks();
+  renderTasks(); // מרנדר מחדש תמיד
 },1000);
 
 setInterval(()=>syncState(false),2500);
