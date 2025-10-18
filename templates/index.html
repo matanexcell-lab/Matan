@@ -33,7 +33,6 @@
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span>
 </div>
 
-<!-- הוספת משימה -->
 <div style="text-align:center;margin-bottom:10px">
   <input id="newName" type="text" placeholder="שם משימה">
   <input id="newH" type="number" min="0" value="0"> שעות
@@ -65,13 +64,6 @@ let tasks = [];
 let syncing = false;
 let isTyping = false;
 
-function fmt(t){
-  t=Math.max(0,parseInt(t));
-  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
-  return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-}
-function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
-
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
   hour12: false,
@@ -79,63 +71,50 @@ const tzFmt = new Intl.DateTimeFormat('he-IL', {
   day: '2-digit', month: '2-digit', year: 'numeric'
 });
 
-// מחשב לוקאלית את שעת הסיום הכוללת ע"פ מצב המשימות והסדר הנוכחי
+function fmt(t){
+  t=Math.max(0,parseInt(t));
+  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
+  return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
+}
+function badge(st){return st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';}
+
+// חישוב לוקאלי של שעת סיום כוללת
 function computeOverallEnd() {
   const nowMs = Date.now();
-  // מוצאים את האינדקס של המשימה הרצה (אם קיימת)
-  let runningIndex = tasks.findIndex(t => t.status === 'running');
-  let baseMs;
-
-  if (runningIndex >= 0) {
-    // אם יש רצה: הבסיס הוא עכשיו + הזמן שנותר במשימה הרצה
-    baseMs = nowMs + (Math.max(0, tasks[runningIndex].remaining) * 1000);
-    // מוסיפים את כל מה ש"בהמשך התור" שהם pending/paused
-    for (let i = runningIndex + 1; i < tasks.length; i++) {
-      const t = tasks[i];
-      if (t.status === 'pending' || t.status === 'paused') {
-        baseMs += Math.max(0, t.remaining) * 1000;
-      }
-    }
-  } else {
-    // אין משימה רצה: מתחילים מעכשיו ומוסיפים את כל ה-pending/paused לפי הסדר
-    baseMs = nowMs;
-    for (let i = 0; i < tasks.length; i++) {
-      const t = tasks[i];
-      if (t.status === 'pending' || t.status === 'paused') {
-        baseMs += Math.max(0, t.remaining) * 1000;
-      }
+  let baseMs = nowMs;
+  let runningFound = false;
+  for (let t of tasks) {
+    if (t.status === "running") {
+      baseMs += t.remaining * 1000;
+      runningFound = true;
+    } else if (t.status === "paused" || t.status === "pending") {
+      baseMs += t.remaining * 1000;
     }
   }
-
-  return new Date(baseMs);
+  if (!runningFound && tasks.length === 0) return "-";
+  return tzFmt.format(new Date(baseMs));
 }
 
-async function api(url, method="GET", body=null, timeout=2500){
-  const ctrl=new AbortController();const id=setTimeout(()=>ctrl.abort(),timeout);
+async function api(url, method="GET", body=null){
   try{
-    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null,signal:ctrl.signal});
-    clearTimeout(id);
+    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
     return await res.json();
   }catch{return null;}
 }
 
-// === סינכרון עדין מהשרת ===
+// === סנכרון עם השרת ===
 async function syncState(){
-  if(syncing || isTyping) return;  // לא נרנדר כשמקלידים
-  syncing=true;
+  if(syncing || isTyping) return;
+  syncing = true;
   const data = await api("/state");
-  syncing=false;
-  if(!data||!data.ok) return;
+  syncing = false;
+  if(!data || !data.ok) return;
   tasks = data.tasks;
-  renderTasks();           // מצייר את הטבלה
-  // מעדכן שעת סיום כוללת לפי חישוב לוקאלי כל סינכרון (מיד יקרה גם כל שנייה)
-  const end = computeOverallEnd();
-  $("#overallEnd").textContent = tzFmt.format(end);
+  renderTasks();
 }
 
-// === הצגת משימות ===
 function renderTasks(){
-  if(isTyping) return; // לא נרנדר אם יש פוקוס על שדה
+  if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
   tasks.forEach((t,i)=>{
@@ -172,16 +151,16 @@ function renderTasks(){
         </div>
       </td>
       <td class="row-actions">
-        <button onclick="act('/start/${t.id}')">התחל</button>
-        <button onclick="act('/pause/${t.id}')">השהה</button>
-        <button onclick="act('/reset/${t.id}')">איפוס</button>
-        <button onclick="act('/set_pending/${t.id}')">Pending</button>
-        <button onclick="act('/skip/${t.id}')">דלג</button>
-        <button onclick="act('/delete/${t.id}')">מחק</button>
+        <button onclick="action('/start/${t.id}')">התחל</button>
+        <button onclick="action('/pause/${t.id}')">השהה</button>
+        <button onclick="action('/reset/${t.id}')">איפוס</button>
+        <button onclick="action('/set_pending/${t.id}')">Pending</button>
+        <button onclick="action('/skip/${t.id}')">דלג</button>
+        <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
 
-    // מניעת סגירת מקלדת
+    // הגנה על המקלדת
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus",()=>isTyping=true);
       inp.addEventListener("blur",()=>isTyping=false);
@@ -190,62 +169,64 @@ function renderTasks(){
   });
 }
 
-// === פעולות ===
-async function act(url){ api(url,"POST"); setTimeout(syncState,400); }
+async function action(url){
+  await api(url,"POST");
+  await syncState();
+}
 async function updateTask(id){
-  const row=document.getElementById("row-"+id);
+  const row=$("#row-"+id);
   const nm=row.querySelector(".edit-name").value;
   const h=parseInt(row.querySelector(".edit-h").value)||0;
   const m=parseInt(row.querySelector(".edit-m").value)||0;
   const s=parseInt(row.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  syncState();
+  await syncState();
 }
 async function extendTask(id){
-  const row=document.getElementById("row-"+id);
+  const row=$("#row-"+id);
   const h=parseInt(row.querySelector(".ext-h").value)||0;
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  syncState();
+  await syncState();
 }
 async function moveTask(id){
-  const row=document.getElementById("row-"+id);
+  const row=$("#row-"+id);
   const newPos=parseInt(row.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  syncState();
+  await syncState();
 }
 
-// === הוספת משימה ===
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
   $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  syncState();
+  await syncState();
 };
 
-// === טיק כל שנייה: מעדכן נותר + שעה נוכחית + שעת סיום כוללת לוקאלית ===
+// לולאת עדכון רציפה
 setInterval(()=>{
-  // מעדכן את הזמן הנותר לוגית (ללא רענון DOM מלא)
+  // מעדכן נותר
   tasks.forEach(t=>{
     if(t.status==="running") t.remaining=Math.max(0,t.remaining-1);
   });
+
+  // מעדכן את המספרים על המסך
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
 
-  // שעה נוכחית
+  // מעדכן את השעה
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
 
-  // חישוב והצגת שעת סיום כוללת בזמן אמת
-  const end = computeOverallEnd();
-  $("#overallEnd").textContent = tzFmt.format(end);
+  // מעדכן שעת סיום כוללת
+  $("#overallEnd").textContent = computeOverallEnd();
 },1000);
 
-// === סינכרון מהשרת כל 3 שניות (לצמצם עומס) ===
-setInterval(syncState,3000);
+// סנכרון מלא מהשרת כל 2 שניות
+setInterval(syncState,2000);
 syncState();
 </script>
 </body>
