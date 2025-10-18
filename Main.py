@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 import pytz
 from flask import Flask, jsonify, render_template, request
-from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine, text
+from sqlalchemy import Column, DateTime, Integer, String, create_engine, text
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 # ===== הגדרות בסיס =====
@@ -11,11 +11,18 @@ TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
 
+# תיקון לכתובת PostgreSQL של Render (אם יש)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
-Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    future=True,
+)
+Session = scoped_session(
+    sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+)
 Base = declarative_base()
 
 @contextmanager
@@ -30,17 +37,16 @@ def session_scope():
     finally:
         s.close()
 
-# ===== מודל =====
+# ===== מודל טבלה =====
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String, nullable=False)
-    duration = Column(Integer, nullable=False)
-    remaining = Column(Integer, nullable=False)
-    status = Column(String, nullable=False)
-    end_time = Column(DateTime(timezone=True))
+    duration = Column(Integer, nullable=False)   # שניות
+    remaining = Column(Integer, nullable=False)  # שניות
+    status = Column(String, nullable=False)      # pending|running|paused|done
+    end_time = Column(DateTime(timezone=True))   # aware
     position = Column(Integer, nullable=False, default=0)
-    is_work = Column(Boolean, default=False)  # 🟢 תוספת חדשה: האם המשימה היא עבודה
 
     def to_dict(self):
         rem = self.remaining
@@ -57,18 +63,20 @@ class Task(Base):
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "end_time_str": self.end_time.astimezone(TZ).strftime("%H:%M:%S") if self.end_time else "-",
             "position": self.position,
-            "is_work": self.is_work,
         }
 
 Base.metadata.create_all(engine)
 
-# אם אין עמודת is_work (לשדרוג אוטומטי)
+# הוספת עמודת position אם חסרה (לא יפגע אם כבר קיימת)
 with engine.connect() as conn:
     try:
-        conn.execute(text("ALTER TABLE tasks ADD COLUMN is_work BOOLEAN DEFAULT 0"))
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN position INTEGER DEFAULT 0"))
         conn.commit()
     except Exception:
         pass
+
+# ===== Flask =====
+app = Flask(__name__)
 
 # ===== פונקציות עזר =====
 def now():
@@ -81,23 +89,64 @@ def hhmmss(total_seconds):
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# ===== Flask =====
-app = Flask(__name__)
+def recompute_chain_in_db():
+    """סוגר רצות שנגמרו ומפעיל את הבאה בתור לפי position."""
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        now_ts = now()
+        for idx, t in enumerate(tasks):
+            if t.status == "running" and t.end_time:
+                rem = int((t.end_time - now_ts).total_seconds())
+                if rem <= 0:
+                    # סיים רצה נוכחית
+                    t.status = "done"
+                    t.remaining = 0
+                    t.end_time = None
+                    s.add(t)
+                    # מפעיל הבאה
+                    if idx + 1 < len(tasks):
+                        nxt = tasks[idx + 1]
+                        if nxt.status == "pending":
+                            nxt.status = "running"
+                            nxt.end_time = now_ts + timedelta(seconds=int(nxt.remaining))
+                            s.add(nxt)
+                else:
+                    if t.remaining != rem:
+                        t.remaining = rem
+                        s.add(t)
 
+def overall_end_time_calc():
+    """שעת סיום כוללת לפי סדר."""
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        if not tasks:
+            return None
+        base = now()
+        for t in tasks:
+            if t.status == "running" and t.end_time and t.end_time > base:
+                base = t.end_time
+        for t in tasks:
+            if t.status in ("pending", "paused"):
+                base = base + timedelta(seconds=int(max(0, t.remaining)))
+        return base
+
+# ===== דפים =====
 @app.route("/")
 def index():
     return render_template("index.html")
 
 @app.route("/state")
 def state():
+    recompute_chain_in_db()
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
         payload = [t.to_dict() for t in tasks]
-        total_work = sum(t.duration for t in tasks if t.is_work)
+    end_all = overall_end_time_calc()
+    end_all_str = end_all.astimezone(TZ).strftime("%H:%M:%S %d.%m.%Y") if end_all else "-"
     return jsonify({
         "ok": True,
         "tasks": payload,
-        "total_work": hhmmss(total_work),
+        "overall_end_time": end_all_str,
         "now": now().strftime("%H:%M:%S %d.%m.%Y")
     })
 
@@ -116,19 +165,6 @@ def add():
         s.add(t)
     return jsonify({"ok": True})
 
-@app.route("/update_work/<int:task_id>", methods=["POST"])
-def update_work(task_id):
-    """עדכון האם המשימה היא 'עבודה'"""
-    data = request.json or {}
-    is_work = bool(data.get("is_work"))
-    with session_scope() as s:
-        t = s.get(Task, task_id)
-        if t:
-            t.is_work = is_work
-            s.add(t)
-    return jsonify({"ok": True})
-
-# שאר הנתיבים (start/pause/reset וכו׳) נשארים אותו דבר
 @app.route("/start/<int:task_id>", methods=["POST"])
 def start(task_id):
     with session_scope() as s:
@@ -166,7 +202,116 @@ def reset(task_id):
 def delete(task_id):
     with session_scope() as s:
         t = s.get(Task, task_id)
-        if t: s.delete(t)
+        if t:
+            s.delete(t)
+            tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+            for idx, x in enumerate(tasks):
+                if x.position != idx:
+                    x.position = idx
+                    s.add(x)
+    return jsonify({"ok": True})
+
+@app.route("/update/<int:task_id>", methods=["POST"])
+def update(task_id):
+    data = request.json or {}
+    with session_scope() as s:
+        t = s.get(Task, task_id)
+        if not t:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        if t.status not in ("pending", "paused", "done"):
+            return jsonify({"ok": False, "error": "cannot edit running task"}), 400
+        if "name" in data:
+            nm = (data.get("name") or "").strip()
+            if nm:
+                t.name = nm
+        if any(k in data for k in ("hours","minutes","seconds")):
+            h = int(data.get("hours") or 0)
+            m = int(data.get("minutes") or 0)
+            ssec = int(data.get("seconds") or 0)
+            duration = max(0, h*3600 + m*60 + ssec)
+            t.duration = duration
+            t.remaining = duration
+            t.end_time = None
+            if t.status == "done":
+                t.status = "pending"
+        s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/extend/<int:task_id>", methods=["POST"])
+def extend(task_id):
+    data = request.json or {}
+    extra = int(data.get("hours",0))*3600 + int(data.get("minutes",0))*60 + int(data.get("seconds",0))
+    if extra <= 0:
+        return jsonify({"ok": False, "error": "extra must be > 0"}), 400
+    with session_scope() as s:
+        t = s.get(Task, task_id)
+        if not t: return jsonify({"ok": False, "error": "not found"}), 404
+        t.duration += extra
+        if t.status == "running" and t.end_time:
+            rem = max(0, int((t.end_time - now()).total_seconds()))
+            t.remaining = rem + extra
+            t.end_time += timedelta(seconds=extra)
+        else:
+            t.remaining += extra
+        s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/skip/<int:task_id>", methods=["POST"])
+def skip(task_id):
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        ids = [t.id for t in tasks]
+        t = s.get(Task, task_id)
+        if t and t.status == "running":
+            t.status = "done"
+            t.remaining = 0
+            t.end_time = None
+            s.add(t)
+            if task_id in ids:
+                idx = ids.index(task_id)
+                if idx + 1 < len(tasks):
+                    nxt = tasks[idx + 1]
+                    if nxt.status == "pending":
+                        nxt.status = "running"
+                        nxt.end_time = now() + timedelta(seconds=int(nxt.remaining))
+                        s.add(nxt)
+    return jsonify({"ok": True})
+
+@app.route("/set_pending/<int:task_id>", methods=["POST"])
+def set_pending(task_id):
+    with session_scope() as s:
+        t = s.get(Task, task_id)
+        if t and t.status in ("paused","done","pending"):
+            if t.status == "done":
+                t.remaining = t.duration
+            t.status = "pending"
+            t.end_time = None
+            s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/reorder_single", methods=["POST"])
+def reorder_single():
+    data = request.json or {}
+    task_id = data.get("task_id")
+    try:
+        new_pos = int(data.get("new_position", 0))
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid new_position"}), 400
+    if not task_id:
+        return jsonify({"ok": False, "error": "no task_id"}), 400
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        ids = [t.id for t in tasks]
+        if task_id not in ids:
+            return jsonify({"ok": False, "error": "task not found"}), 404
+        old_idx = ids.index(task_id)
+        new_idx = max(0, min(new_pos-1, len(ids)-1))
+        ids.insert(new_idx, ids.pop(old_idx))
+        for idx, tid in enumerate(ids):
+            t = s.get(Task, tid)
+            if t and t.position != idx:
+                t.position = idx
+                s.add(t)
     return jsonify({"ok": True})
 
 if __name__ == "__main__":
