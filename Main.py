@@ -1,8 +1,10 @@
 import os
+import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+
 import pytz
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, Response
 from sqlalchemy import Column, DateTime, Integer, String, create_engine, text
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
@@ -11,7 +13,7 @@ TZ = pytz.timezone("Asia/Jerusalem")
 DEFAULT_SQLITE_URL = "sqlite:///tasks.db"
 DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_SQLITE_URL)
 
-# תיקון לכתובת PostgreSQL של Render (אם יש)
+# תיקון לכתובת PostgreSQL (אם מישהו ישתמש)
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
@@ -40,13 +42,14 @@ def session_scope():
 # ===== מודל טבלה =====
 class Task(Base):
     __tablename__ = "tasks"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    name = Column(String, nullable=False)
-    duration = Column(Integer, nullable=False)   # שניות
-    remaining = Column(Integer, nullable=False)  # שניות
-    status = Column(String, nullable=False)      # pending|running|paused|done
-    end_time = Column(DateTime(timezone=True))   # aware
-    position = Column(Integer, nullable=False, default=0)
+    id        = Column(Integer, primary_key=True, autoincrement=True)
+    name      = Column(String, nullable=False)
+    duration  = Column(Integer, nullable=False)   # שניות
+    remaining = Column(Integer, nullable=False)   # שניות
+    status    = Column(String, nullable=False)    # pending|running|paused|done
+    end_time  = Column(DateTime(timezone=True))   # aware
+    position  = Column(Integer, nullable=False, default=0)
+    is_work   = Column(Integer, nullable=False, default=0)  # 0/1 האם זו משימת "עבודה"
 
     def to_dict(self):
         rem = self.remaining
@@ -63,14 +66,20 @@ class Task(Base):
             "end_time": self.end_time.isoformat() if self.end_time else None,
             "end_time_str": self.end_time.astimezone(TZ).strftime("%H:%M:%S") if self.end_time else "-",
             "position": self.position,
+            "is_work": int(self.is_work or 0),
         }
 
 Base.metadata.create_all(engine)
 
-# הוספת עמודת position אם חסרה (לא יפגע אם כבר קיימת)
+# הוספת עמודות אם חסרות (idempotent)
 with engine.connect() as conn:
     try:
         conn.execute(text("ALTER TABLE tasks ADD COLUMN position INTEGER DEFAULT 0"))
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        conn.execute(text("ALTER TABLE tasks ADD COLUMN is_work INTEGER DEFAULT 0"))
         conn.commit()
     except Exception:
         pass
@@ -98,12 +107,10 @@ def recompute_chain_in_db():
             if t.status == "running" and t.end_time:
                 rem = int((t.end_time - now_ts).total_seconds())
                 if rem <= 0:
-                    # סיים רצה נוכחית
                     t.status = "done"
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
-                    # מפעיל הבאה
                     if idx + 1 < len(tasks):
                         nxt = tasks[idx + 1]
                         if nxt.status == "pending":
@@ -161,7 +168,7 @@ def add():
     duration = max(0, h*3600 + m*60 + ssec)
     with session_scope() as s:
         max_pos = s.query(Task).count()
-        t = Task(name=name, duration=duration, remaining=duration, status="pending", position=max_pos)
+        t = Task(name=name, duration=duration, remaining=duration, status="pending", position=max_pos, is_work=0)
         s.add(t)
     return jsonify({"ok": True})
 
@@ -314,5 +321,74 @@ def reorder_single():
                 s.add(t)
     return jsonify({"ok": True})
 
+# ===== סימון משימה כ"עבודה" =====
+@app.route("/set_work/<int:task_id>", methods=["POST"])
+def set_work(task_id):
+    data = request.json or {}
+    val = 1 if data.get("is_work") else 0
+    with session_scope() as s:
+        t = s.get(Task, task_id)
+        if not t:
+            return jsonify({"ok": False, "error": "not found"}), 404
+        t.is_work = val
+        s.add(t)
+    return jsonify({"ok": True})
+
+# ===== יצוא/יבוא לקובץ JSON =====
+@app.route("/export_json", methods=["GET"])
+def export_json():
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
+        payload = [t.to_dict() for t in tasks]
+    data = json.dumps({"version": 1, "generated_at": now().isoformat(), "tasks": payload}, ensure_ascii=False)
+    return Response(
+        data,
+        mimetype="application/json",
+        headers={"Content-Disposition": 'attachment; filename="tasks_backup.json"'}
+    )
+
+@app.route("/import_json", methods=["POST"])
+def import_json():
+    data = request.get_json(silent=True) or {}
+    items = data.get("tasks", [])
+    if not isinstance(items, list):
+        return jsonify({"ok": False, "error": "invalid payload"}), 400
+
+    with session_scope() as s:
+        # מוחקים הכל
+        s.query(Task).delete()
+
+        # מכניסים מחדש לפי הסדר
+        for idx, it in enumerate(items):
+            name      = (it.get("name") or "").strip() or "משימה"
+            duration  = int(it.get("duration") or 0)
+            remaining = int(it.get("remaining") or duration)
+            status    = it.get("status") or "pending"
+            is_work   = 1 if it.get("is_work") else 0
+
+            end_time_str = it.get("end_time")
+            end_dt = None
+            if end_time_str:
+                try:
+                    end_dt = datetime.fromisoformat(end_time_str)
+                    if end_dt.tzinfo is None:
+                        end_dt = TZ.localize(end_dt)
+                except Exception:
+                    end_dt = None
+
+            t = Task(
+                name=name,
+                duration=duration,
+                remaining=remaining,
+                status=status,
+                end_time=end_dt,
+                position=idx,
+                is_work=is_work
+            )
+            s.add(t)
+
+    return jsonify({"ok": True})
+
+# ===== Run =====
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
