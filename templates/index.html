@@ -23,19 +23,27 @@
     display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
   }
   tr { transition: background-color 0.4s ease; }
+  .toolbar { text-align:center; margin-bottom:10px }
+  .hstack { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
 </style>
 </head>
 <body>
 
 <h1>⏱️ טיימר משימות</h1>
 
-<div style="text-align:center;margin-bottom:10px">
+<div class="toolbar">
   <div id="now" class="muted"></div>
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span>
+  <div class="hstack" style="margin-top:6px">
+    <button id="btnExport">📤 ייצא משימות</button>
+    <input id="fileImport" type="file" accept="application/json" style="display:none">
+    <button id="btnImport">📥 ייבא משימות</button>
+    <span class="muted">זמן עבודה כולל: <b id="workTotal">00:00:00</b></span>
+  </div>
 </div>
 
 <!-- הוספת משימה -->
-<div style="text-align:center;margin-bottom:10px">
+<div class="hstack" style="margin-bottom:10px">
   <input id="newName" type="text" placeholder="שם משימה">
   <input id="newH" type="number" min="0" value="0"> שעות
   <input id="newM" type="number" min="0" value="0"> דקות
@@ -56,6 +64,7 @@
       <th>הארכה</th>
       <th>העברה</th>
       <th>פעולות</th>
+      <th>עבודה</th>
     </tr>
   </thead>
   <tbody id="tbody"></tbody>
@@ -68,7 +77,6 @@ let syncing = false;
 let lastServerSync = 0;
 let isTyping = false;
 let frozenLayout = null;
-let activeTaskId = null;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -98,6 +106,13 @@ function computeOverallEnd(){
   const end = new Date(nowMs + total*1000);
   return tzFmt.format(end);
 }
+function computeWorkTotal(){
+  let total = 0;
+  for (const t of tasks){
+    if (t.is_work) total += (t.duration || 0);
+  }
+  return fmt(total);
+}
 
 async function api(url, method="GET", body=null){
   try{
@@ -117,14 +132,14 @@ async function syncState(force=false){
   if(!data || !data.ok) return;
   tasks = data.tasks;
 
-  // ❄️ לא נחשב זמני התחלה/סיום מחדש אם יש משימה פעילה
   if (!tasks.some(t => t.status === "running"))
     computeTimesOnce();
 
   renderTasks(true);
+  $("#workTotal").textContent = computeWorkTotal();
 }
 
-/* ✅ מחשב פעם אחת בלבד זמני התחלה/סיום */
+/* מחשב פעם אחת בלבד זמני התחלה/סיום */
 function computeTimesOnce(){
   const now = Date.now();
   const n = tasks.length;
@@ -144,7 +159,6 @@ function computeTimesOnce(){
     const startRun = now - elapsed * 1000;
     const endRun = startRun + run.duration * 1000;
 
-    // לפני המשימה הפעילה
     let end = startRun;
     for (let i = r - 1; i >= 0; i--) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
@@ -152,10 +166,8 @@ function computeTimesOnce(){
       end -= dur;
     }
 
-    // המשימה הפעילה
     layout.push({ id: run.id, start: startRun, end: endRun });
 
-    // אחרי המשימה הפעילה
     let start = endRun;
     for (let i = r + 1; i < n; i++) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
@@ -166,7 +178,7 @@ function computeTimesOnce(){
   frozenLayout = layout;
 }
 
-function renderTasks(fromSync=false){
+function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
@@ -219,12 +231,23 @@ function renderTasks(fromSync=false){
         <button onclick="action('/set_pending/${t.id}')">Pending</button>
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
-      </td>`;
+      </td>
+      <td><input type="checkbox" class="work-chk" ${t.is_work ? "checked":""}></td>
+    `;
     tb.appendChild(tr);
 
-    tr.querySelectorAll("input").forEach(inp=>{
+    // שמירת "עבודה"
+    tr.querySelector(".work-chk").addEventListener("change", async (e)=>{
+      await api(`/set_work/${t.id}`,"POST",{is_work: e.target.checked});
+      const rowTask = tasks.find(x=>x.id===t.id);
+      if (rowTask) rowTask.is_work = e.target.checked ? 1 : 0;
+      $("#workTotal").textContent = computeWorkTotal();
+    });
+
+    tr.querySelectorAll("input[type='text'],input[type='number']").forEach(inp=>{
       inp.addEventListener("focusin", ()=>isTyping=true);
       inp.addEventListener("focusout", ()=>isTyping=false);
+      inp.addEventListener("touchstart", ()=>isTyping=true,{passive:true});
     });
   });
 }
@@ -233,12 +256,12 @@ async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
-    if(url.includes("/start/"))  { t.status="running"; activeTaskId=t.id; computeTimesOnce(); }
-    if(url.includes("/pause/"))  { t.status="paused"; activeTaskId=null; computeTimesOnce(); }
-    if(url.includes("/set_pending/")) { t.status="pending"; activeTaskId=null; computeTimesOnce(); }
-    if(url.includes("/skip/"))   { t.status="done"; activeTaskId=null; computeTimesOnce(); }
+    if(url.includes("/start/"))  { t.status="running"; computeTimesOnce(); }
+    if(url.includes("/pause/"))  { t.status="paused"; computeTimesOnce(); }
+    if(url.includes("/set_pending/")) { t.status="pending"; computeTimesOnce(); }
+    if(url.includes("/skip/"))   { t.status="done"; computeTimesOnce(); }
     if(url.includes("/delete/")) { tasks=tasks.filter(x=>x.id!==id); computeTimesOnce(); }
-    renderTasks(true);
+    renderTasks();
   }
   await api(url,"POST");
   await syncState(true);
@@ -275,7 +298,34 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-/* ✅ עדכון שוטף */
+/* ייצוא/ייבוא */
+$("#btnExport").onclick = async ()=>{
+  const res = await fetch("/export_json");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tasks_backup.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+};
+
+$("#btnImport").onclick = ()=> $("#fileImport").click();
+
+$("#fileImport").addEventListener("change", async (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  const text = await f.text();
+  let data;
+  try { data = JSON.parse(text); } catch { alert("קובץ לא תקין"); return; }
+  await api("/import_json","POST", data);
+  await syncState(true);
+  e.target.value = "";
+});
+
+/* עדכון שוטף */
 setInterval(()=>{
   const running = tasks.find(t=>t.status==="running");
   if(running){
