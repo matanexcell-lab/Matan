@@ -54,7 +54,7 @@ def state():
     overall_end = now_ts + timedelta(seconds=total_rem) if total_rem > 0 else None
     end_str = overall_end.strftime("%H:%M:%S %d.%m.%Y") if overall_end else "-"
 
-    # חישוב זמן עבודה כולל (רק משימות שסומנו כעבודה)
+    # חישוב זמן עבודה כולל (משימות שסומנו כעבודה)
     total_work = sum(t["duration"] for t in tasks if t.get("is_work"))
     work_hhmmss = hhmmss(total_work)
 
@@ -120,6 +120,21 @@ def delete(tid):
     data = load_data()
     data["tasks"] = [t for t in data["tasks"] if t["id"] != tid]
     save_data(data)
+    return jsonify({"ok": True})
+
+# ✅ ייצוא המשימות כקובץ JSON
+@app.route("/export")
+def export():
+    data = load_data()
+    return jsonify(data)
+
+# ✅ ייבוא משימות (מחליף את כל הרשימה)
+@app.route("/import", methods=["POST"])
+def import_tasks():
+    new_data = request.json or {}
+    if "tasks" not in new_data:
+        return jsonify({"ok": False, "error": "missing tasks"}), 400
+    save_data(new_data)
     return jsonify({"ok": True})
 
 if __name__ == "__main__":
