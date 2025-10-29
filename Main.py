@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from flask import Flask, jsonify, render_template, request, make_response
-from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine, text
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 # ====================================================
@@ -13,12 +13,17 @@ from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 # ====================================================
 TZ = pytz.timezone("Asia/Jerusalem")
 
-# שימוש קבוע ב־PostgreSQL בענן (Render Data)
-DATABASE_URL = "postgresql://meitar_user:rnw5jOCjnkfts5RBd6ZCYsIle4VkxjvL@dpg-d3aqv7ruibrs73evq640-a/meitar"
+# קריאת ה־DATABASE_URL ממשתנה הסביבה
+DATABASE_URL = os.getenv("DATABASE_URL")
 
+if not DATABASE_URL:
+    raise ValueError("❌ DATABASE_URL environment variable is not set!")
+
+# חיבור למסד הנתונים
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
 Base = declarative_base()
+
 
 @contextmanager
 def session_scope():
@@ -32,8 +37,10 @@ def session_scope():
     finally:
         s.close()
 
+
 def now():
     return datetime.now(TZ)
+
 
 def hhmmss(total_seconds):
     total_seconds = max(0, int(total_seconds or 0))
@@ -41,6 +48,7 @@ def hhmmss(total_seconds):
     m = (total_seconds % 3600) // 60
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
+
 
 # ====================================================
 # מודל המשימה
@@ -76,6 +84,7 @@ class Task(Base):
             "position": self.position,
             "is_work": self.is_work,
         }
+
 
 Base.metadata.create_all(engine)
 
@@ -113,12 +122,14 @@ def recompute_chain():
                     s.add(t)
                     changed = True
     if changed:
-        pass  # PostgreSQL כבר שומר הכול קבוע
+        pass
+
 
 def work_total_seconds():
     with session_scope() as s:
         items = s.query(Task).filter(Task.is_work == True).all()
         return sum(int(x.duration or 0) for x in items)
+
 
 # ====================================================
 # ROUTES
@@ -126,6 +137,7 @@ def work_total_seconds():
 @app.route("/")
 def index():
     return render_template("index.html")
+
 
 @app.route("/state")
 def state():
@@ -141,6 +153,7 @@ def state():
         "now": now().strftime("%H:%M:%S %d.%m.%Y")
     })
 
+
 @app.route("/add", methods=["POST"])
 def add():
     data = request.json or {}
@@ -154,6 +167,7 @@ def add():
         s.add(Task(name=name, duration=dur, remaining=dur, status="pending", position=pos))
     return jsonify({"ok": True})
 
+
 @app.route("/start/<int:tid>", methods=["POST"])
 def start(tid):
     with session_scope() as s:
@@ -163,6 +177,7 @@ def start(tid):
             t.end_time = now() + timedelta(seconds=t.remaining)
             s.add(t)
     return jsonify({"ok": True})
+
 
 @app.route("/pause/<int:tid>", methods=["POST"])
 def pause(tid):
@@ -178,6 +193,7 @@ def pause(tid):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/workflag/<int:tid>", methods=["POST"])
 def workflag(tid):
     data = request.json or {}
@@ -189,6 +205,7 @@ def workflag(tid):
             s.add(t)
     return jsonify({"ok": True})
 
+
 @app.route("/export")
 def export():
     with session_scope() as s:
@@ -199,6 +216,7 @@ def export():
     resp.headers["Content-Type"] = "application/json; charset=utf-8"
     resp.headers["Content-Disposition"] = "attachment; filename=tasks_export.json"
     return resp
+
 
 @app.route("/import", methods=["POST"])
 def import_tasks():
@@ -216,6 +234,7 @@ def import_tasks():
                 is_work=bool(t.get("is_work", False))
             ))
     return jsonify({"ok": True})
+
 
 # ====================================================
 # ריצה מקומית
