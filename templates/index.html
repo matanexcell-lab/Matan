@@ -136,6 +136,7 @@ function renderTasks(){
     const startStr = lay ? new Date(lay.start).toLocaleTimeString("he-IL",{hour12:false}) : "-";
     const endStr   = lay ? new Date(lay.end).toLocaleTimeString("he-IL",{hour12:false})   : "-";
     const tr=document.createElement("tr");
+    tr.id = "row-" + t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
     tr.innerHTML=`
@@ -172,7 +173,7 @@ function renderTasks(){
       </td>`;
     tb.appendChild(tr);
 
-    // אירוע עבודה
+    // טיפול בשדה עבודה
     tr.querySelector(".work-flag").addEventListener("change",async(e)=>{
       await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
       await syncState(true);
@@ -180,31 +181,33 @@ function renderTasks(){
   });
 }
 
-// פעולות
-async function action(url){ await api(url,"POST"); await syncState(true); }
+// 🟢 עריכה מלאה — שם וזמן
 async function updateTask(id){
-  const r=$("#row-"+id)||document.querySelectorAll("tr")[id-1];
-  const nm=r.querySelector(".edit-name").value;
-  const h=parseInt(r.querySelector(".edit-h").value)||0;
-  const m=parseInt(r.querySelector(".edit-m").value)||0;
-  const s=parseInt(r.querySelector(".edit-s").value)||0;
+  const row = document.getElementById("row-" + id);
+  if(!row) return;
+  const nm = row.querySelector(".edit-name").value.trim() || "משימה";
+  const h = parseInt(row.querySelector(".edit-h").value)||0;
+  const m = parseInt(row.querySelector(".edit-m").value)||0;
+  const s = parseInt(row.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
+
 async function extendTask(id){
-  const r=document.querySelectorAll("tr")[id-1];
-  const h=parseInt(r.querySelector(".ext-h").value)||0;
-  const m=parseInt(r.querySelector(".ext-m").value)||0;
-  const s=parseInt(r.querySelector(".ext-s").value)||0;
+  const row = document.getElementById("row-" + id);
+  const h=parseInt(row.querySelector(".ext-h").value)||0;
+  const m=parseInt(row.querySelector(".ext-m").value)||0;
+  const s=parseInt(row.querySelector(".ext-s").value)||0;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 async function moveTask(id){
-  const r=document.querySelectorAll("tr")[id-1];
-  const newPos=parseInt(r.querySelector(".move-to").value)||1;
+  const row = document.getElementById("row-" + id);
+  const newPos=parseInt(row.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
   await syncState(true);
 }
+async function action(url){ await api(url,"POST"); await syncState(true); }
 
 // הוספת משימה
 $("#btnAdd").onclick=async()=>{
