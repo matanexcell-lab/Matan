@@ -3,7 +3,6 @@ import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 import pytz
-
 from flask import Flask, jsonify, render_template, request, make_response
 from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
@@ -13,17 +12,15 @@ from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 # ====================================================
 TZ = pytz.timezone("Asia/Jerusalem")
 
-# קריאת ה־DATABASE_URL ממשתנה הסביבה
-DATABASE_URL = os.getenv("DATABASE_URL")
+# שימוש בקבוע DATABASE_URL מסביבת Render
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://matan_nb_user:Qzcukb3uonnqU3wgDxKyzkxeEaT83PJp@dpg-d40u1m7gi27c73d0oorg-a:5432/matan_nb"
+)
 
-if not DATABASE_URL:
-    raise ValueError("❌ DATABASE_URL environment variable is not set!")
-
-# חיבור למסד הנתונים
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
 Base = declarative_base()
-
 
 @contextmanager
 def session_scope():
@@ -37,10 +34,8 @@ def session_scope():
     finally:
         s.close()
 
-
 def now():
     return datetime.now(TZ)
-
 
 def hhmmss(total_seconds):
     total_seconds = max(0, int(total_seconds or 0))
@@ -49,13 +44,11 @@ def hhmmss(total_seconds):
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-
 # ====================================================
 # מודל המשימה
 # ====================================================
 class Task(Base):
     __tablename__ = "tasks"
-
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     duration = Column(Integer, nullable=False)
@@ -84,7 +77,6 @@ class Task(Base):
             "position": self.position,
             "is_work": self.is_work,
         }
-
 
 Base.metadata.create_all(engine)
 
@@ -122,14 +114,12 @@ def recompute_chain():
                     s.add(t)
                     changed = True
     if changed:
-        pass
-
+        pass  # PostgreSQL שומר את הכול קבוע
 
 def work_total_seconds():
     with session_scope() as s:
         items = s.query(Task).filter(Task.is_work == True).all()
         return sum(int(x.duration or 0) for x in items)
-
 
 # ====================================================
 # ROUTES
@@ -137,7 +127,6 @@ def work_total_seconds():
 @app.route("/")
 def index():
     return render_template("index.html")
-
 
 @app.route("/state")
 def state():
@@ -153,7 +142,6 @@ def state():
         "now": now().strftime("%H:%M:%S %d.%m.%Y")
     })
 
-
 @app.route("/add", methods=["POST"])
 def add():
     data = request.json or {}
@@ -167,7 +155,6 @@ def add():
         s.add(Task(name=name, duration=dur, remaining=dur, status="pending", position=pos))
     return jsonify({"ok": True})
 
-
 @app.route("/start/<int:tid>", methods=["POST"])
 def start(tid):
     with session_scope() as s:
@@ -177,7 +164,6 @@ def start(tid):
             t.end_time = now() + timedelta(seconds=t.remaining)
             s.add(t)
     return jsonify({"ok": True})
-
 
 @app.route("/pause/<int:tid>", methods=["POST"])
 def pause(tid):
@@ -193,7 +179,6 @@ def pause(tid):
             s.add(t)
     return jsonify({"ok": True})
 
-
 @app.route("/workflag/<int:tid>", methods=["POST"])
 def workflag(tid):
     data = request.json or {}
@@ -205,7 +190,105 @@ def workflag(tid):
             s.add(t)
     return jsonify({"ok": True})
 
+# ====================================================
+# ✅ פיצ’רים נוספים: עדכון, הארכה, העברה, מחיקה וכו’
+# ====================================================
+@app.route("/update/<int:tid>", methods=["POST"])
+def update_task(tid):
+    data = request.json or {}
+    name = (data.get("name") or "").strip()
+    h = int(data.get("hours", 0))
+    m = int(data.get("minutes", 0))
+    ssec = int(data.get("seconds", 0))
+    dur = h * 3600 + m * 60 + ssec
 
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            if name:
+                t.name = name
+            if dur > 0:
+                t.duration = dur
+                t.remaining = dur
+            s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/extend/<int:tid>", methods=["POST"])
+def extend_task(tid):
+    data = request.json or {}
+    h = int(data.get("hours", 0))
+    m = int(data.get("minutes", 0))
+    ssec = int(data.get("seconds", 0))
+    add_sec = h * 3600 + m * 60 + ssec
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t and add_sec > 0:
+            t.duration += add_sec
+            t.remaining += add_sec
+            if t.status == "running" and t.end_time:
+                t.end_time += timedelta(seconds=add_sec)
+            s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/reorder_single", methods=["POST"])
+def reorder_single():
+    data = request.json or {}
+    tid = int(data.get("task_id", 0))
+    new_pos = int(data.get("new_position", 1)) - 1
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc()).all()
+        ids = [t.id for t in tasks if t.id != tid]
+        ids.insert(max(0, min(new_pos, len(ids))), tid)
+        for i, id_ in enumerate(ids):
+            t = s.get(Task, id_)
+            if t:
+                t.position = i
+                s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/reset/<int:tid>", methods=["POST"])
+def reset_task(tid):
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            t.remaining = t.duration
+            t.status = "pending"
+            t.end_time = None
+            s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/set_pending/<int:tid>", methods=["POST"])
+def set_pending(tid):
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            t.status = "pending"
+            t.end_time = None
+            s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/skip/<int:tid>", methods=["POST"])
+def skip_task(tid):
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            t.status = "done"
+            t.remaining = 0
+            t.end_time = None
+            s.add(t)
+    return jsonify({"ok": True})
+
+@app.route("/delete/<int:tid>", methods=["POST"])
+def delete_task(tid):
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            s.delete(t)
+    return jsonify({"ok": True})
+
+# ====================================================
+# ייבוא וייצוא
+# ====================================================
 @app.route("/export")
 def export():
     with session_scope() as s:
@@ -217,7 +300,6 @@ def export():
     resp.headers["Content-Disposition"] = "attachment; filename=tasks_export.json"
     return resp
 
-
 @app.route("/import", methods=["POST"])
 def import_tasks():
     data = request.json or {}
@@ -228,13 +310,12 @@ def import_tasks():
             s.add(Task(
                 name=t.get("name", "משימה"),
                 duration=int(t.get("duration", 0)),
-                remaining=int(t.get("duration", 0)),
+                remaining=int(t.get("remaining", 0)),
                 status=t.get("status", "pending"),
                 position=i,
                 is_work=bool(t.get("is_work", False))
             ))
     return jsonify({"ok": True})
-
 
 # ====================================================
 # ריצה מקומית
