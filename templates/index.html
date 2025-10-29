@@ -39,7 +39,6 @@
 </div>
 
 <div class="tools">
-  <!-- הוספת משימה -->
   <span>
     <input id="newName" type="text" placeholder="שם משימה">
     <input id="newH" type="number" min="0" value="0"> שעות
@@ -48,7 +47,6 @@
     <button id="btnAdd">➕ הוסף</button>
   </span>
 
-  <!-- ייצוא/ייבוא -->
   <span>
     <button id="btnExport">📤 ייצא</button>
     <label style="cursor:pointer">
@@ -81,26 +79,12 @@
 const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
-let lastServerSync = 0;
 let isTyping = false;
-let frozenLayout = null;   // לא זז כשיש רצה פעילה
-
-const tzFmt = new Intl.DateTimeFormat('he-IL', {
-  timeZone: 'Asia/Jerusalem',
-  hour12: false,
-  hour: '2-digit', minute: '2-digit', second: '2-digit'
-});
 
 function fmt(t){
   t=Math.max(0,parseInt(t));
   let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
   return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-}
-function badgeClass(st){
-  if(st==='running') return 'badge running';
-  if(st==='paused')  return 'badge paused';
-  if(st==='pending') return 'badge pending';
-  return 'badge done';
 }
 
 async function api(url, method="GET", body=null){
@@ -110,211 +94,114 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-function computeOverallEndLocal(){
-  // לפי remaining הנוכחי בדפדפן – לשקף מסך בלי רענון
-  const nowMs = Date.now();
-  let total = 0;
+function computeTimesLayout(){
+  const now = Date.now();
+  let totalOffset = 0;
+  const layout = [];
   for (const t of tasks){
-    if(["running","paused","pending"].includes(t.status))
-      total += t.remaining;
+    const start = now + totalOffset * 1000;
+    totalOffset += Math.max(0, t.remaining);
+    const end = now + totalOffset * 1000;
+    layout.push({id:t.id,start,end});
   }
-  if(total===0) return "-";
-  return tzFmt.format(new Date(nowMs + total*1000));
+  return layout;
 }
 
-/* מחשב פעם אחת בלבד זמני התחלה/סיום */
-function computeTimesOnce(){
-  const now = Date.now();
-  const n = tasks.length;
-  const r = tasks.findIndex(t => t.status === 'running');
-  let layout = [];
-
-  if (r === -1) {
-    let base = now;
-    for (let i = 0; i < n; i++) {
-      const dur = Math.max(0, tasks[i].remaining) * 1000;
-      layout.push({ id: tasks[i].id, start: base, end: base + dur });
-      base += dur;
-    }
-  } else {
-    const run = tasks[r];
-    const elapsed = Math.max(0, run.duration - run.remaining);
-    const startRun = now - elapsed * 1000;
-    const endRun = startRun + run.duration * 1000;
-
-    // לפני המשימה הפעילה
-    let end = startRun;
-    for (let i = r - 1; i >= 0; i--) {
-      const dur = Math.max(0, tasks[i].remaining) * 1000;
-      layout.unshift({ id: tasks[i].id, start: end - dur, end: end });
-      end -= dur;
-    }
-
-    // המשימה הפעילה
-    layout.push({ id: run.id, start: startRun, end: endRun });
-
-    // אחרי המשימה הפעילה
-    let start = endRun;
-    for (let i = r + 1; i < n; i++) {
-      const dur = Math.max(0, tasks[i].remaining) * 1000;
-      layout.push({ id: tasks[i].id, start: start, end: start + dur });
-      start += dur;
-    }
-  }
-  frozenLayout = layout;
+function computeOverallEndLocal(){
+  const layout = computeTimesLayout();
+  if (layout.length === 0) return "-";
+  const end = layout[layout.length-1].end;
+  const dt = new Date(end);
+  return dt.toLocaleTimeString("he-IL",{hour12:false});
 }
 
 async function syncState(force=false){
-  const now = Date.now();
-  if(syncing) return;
-  if(!force && now - lastServerSync < 2000) return;
+  if(syncing && !force) return;
   syncing = true;
   const data = await api("/state");
   syncing = false;
-  lastServerSync = now;
   if(!data || !data.ok) return;
-
   tasks = data.tasks;
-
-  // סטטוסים / זמן עבודה כולל / שעה כוללת
   $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
-  $("#overallEnd").textContent = data.overall_end_time || "-";
-  $("#now").textContent = data.now || "";
-
-  // אם אין רצה פעילה – מחשבים ומעדכנים כל רינדור
-  if (!tasks.some(t => t.status === "running"))
-    frozenLayout = null;
-
-  renderTasks(true);
+  renderTasks();
 }
 
-function renderTasks(fromSync=false){
+function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
-
-  if (!frozenLayout) computeTimesOnce();
-
+  const layout = computeTimesLayout();
   tasks.forEach((t,i)=>{
+    const lay = layout.find(x=>x.id===t.id);
+    const startStr = lay ? new Date(lay.start).toLocaleTimeString("he-IL",{hour12:false}) : "-";
+    const endStr   = lay ? new Date(lay.end).toLocaleTimeString("he-IL",{hour12:false})   : "-";
     const tr=document.createElement("tr");
-    tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-
-    const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
-    const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
-    const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
-
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col">
-        <input type="checkbox" class="work-flag" ${t.is_work ? "checked": ""} title="סמן כעבודה">
-      </td>
-      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
-      <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
+      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
+      <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
+      <td><span>${fmt(t.remaining)}</span></td>
       <td>${startStr}</td>
       <td>${endStr}</td>
-      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
+      <td>${t.status}</td>
       <td>
-        <div class="edit-grid">
-          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
-          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
-          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
-          <button ${canEdit?"":"disabled"} onclick="updateTask(${t.id})">עדכן</button>
-        </div>
+        <input class="edit-h" type="number" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
+        <input class="edit-m" type="number" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
+        <input class="edit-s" type="number" value="${t.duration%60}" ${canEdit?"":"disabled"}>
+        <button onclick="updateTask(${t.id})" ${canEdit?"":"disabled"}>עדכן</button>
       </td>
       <td>
-        <div class="extend-grid">
-          <input class="ext-h" type="number" min="0" value="0">:
-          <input class="ext-m" type="number" min="0" value="0">:
-          <input class="ext-s" type="number" min="0" value="0">
-          <button onclick="extendTask(${t.id})">הארך</button>
-        </div>
+        <input class="ext-h" type="number" value="0">:
+        <input class="ext-m" type="number" value="0">:
+        <input class="ext-s" type="number" value="0">
+        <button onclick="extendTask(${t.id})">הארך</button>
       </td>
       <td>
-        <div class="move-grid">
-          <input class="move-to" type="number" min="1" value="${i+1}">
-          <button onclick="moveTask(${t.id})">העבר</button>
-        </div>
+        <input class="move-to" type="number" min="1" value="${i+1}">
+        <button onclick="moveTask(${t.id})">העבר</button>
       </td>
-      <td class="row-actions">
+      <td>
         <button onclick="action('/start/${t.id}')">התחל</button>
         <button onclick="action('/pause/${t.id}')">השהה</button>
-        <button onclick="action('/reset/${t.id}')">איפוס</button>
+        <button onclick="action('/reset/${t.id}')">אפס</button>
         <button onclick="action('/set_pending/${t.id}')">Pending</button>
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
-
     tb.appendChild(tr);
 
-    // Work checkbox handler
-    const chk = tr.querySelector(".work-flag");
-    chk.addEventListener("change", async (e)=>{
-      await api(`/workflag/${t.id}`, "POST", {is_work: e.target.checked});
-      // משנים לוקאלית כדי לעדכן מיידית ללא רענון
-      t.is_work = e.target.checked;
-      // נשאל מהשרת את הסיכום (כדי שלא נספור לבד ונחרוג)
+    // אירוע עבודה
+    tr.querySelector(".work-flag").addEventListener("change",async(e)=>{
+      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
       await syncState(true);
-    });
-
-    tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focusin", ()=>isTyping=true);
-      inp.addEventListener("focusout", ()=>isTyping=false);
-      inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
     });
   });
 }
 
-// עדכון סטטוס מיידי בשורה (ללא רענון)
-function updateRowStatus(id, status) {
-  const row = document.getElementById(`row-${id}`);
-  if (!row) return;
-  row.className = status;
-  const badge = row.querySelector("td:nth-child(7) span");
-  if (badge) {
-    badge.className = badgeClass(status);
-    badge.textContent = status;
-  }
-}
-
-async function action(url){
-  const id=parseInt(url.split("/").pop());
-  const t=tasks.find(x=>x.id===id);
-  if(t){
-    if(url.includes("/start/"))  { t.status="running"; frozenLayout = null; }
-    if(url.includes("/pause/"))  { t.status="paused"; frozenLayout = null; }
-    if(url.includes("/reset/"))  { t.status="running"; t.remaining=t.duration; frozenLayout = null; }
-    if(url.includes("/set_pending/")) { t.status="pending"; frozenLayout = null; }
-    if(url.includes("/skip/"))   { t.status="done"; frozenLayout = null; }
-    if(url.includes("/delete/")) { tasks=tasks.filter(x=>x.id!==id); frozenLayout = null; }
-    updateRowStatus(id, t.status);
-    renderTasks(true);
-  }
-  await api(url,"POST");
-  await syncState(true);
-}
-
+// פעולות
+async function action(url){ await api(url,"POST"); await syncState(true); }
 async function updateTask(id){
-  const row=$("#row-"+id);
-  const nm=row.querySelector(".edit-name").value;
-  const h=parseInt(row.querySelector(".edit-h").value)||0;
-  const m=parseInt(row.querySelector(".edit-m").value)||0;
-  const s=parseInt(row.querySelector(".edit-s").value)||0;
+  const r=$("#row-"+id)||document.querySelectorAll("tr")[id-1];
+  const nm=r.querySelector(".edit-name").value;
+  const h=parseInt(r.querySelector(".edit-h").value)||0;
+  const m=parseInt(r.querySelector(".edit-m").value)||0;
+  const s=parseInt(r.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 async function extendTask(id){
-  const row=$("#row-"+id);
-  const h=parseInt(row.querySelector(".ext-h").value)||0;
-  const m=parseInt(row.querySelector(".ext-m").value)||0;
-  const s=parseInt(row.querySelector(".ext-s").value)||0;
+  const r=document.querySelectorAll("tr")[id-1];
+  const h=parseInt(r.querySelector(".ext-h").value)||0;
+  const m=parseInt(r.querySelector(".ext-m").value)||0;
+  const s=parseInt(r.querySelector(".ext-s").value)||0;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 async function moveTask(id){
-  const row=$("#row-"+id);
-  const newPos=parseInt(row.querySelector(".move-to").value)||1;
+  const r=document.querySelectorAll("tr")[id-1];
+  const newPos=parseInt(r.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
   await syncState(true);
 }
@@ -328,61 +215,36 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-// ייצוא
+// ייצוא / ייבוא
 $("#btnExport").onclick = async ()=>{
   const res = await fetch("/export");
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url;
-  a.download = "tasks_export.json";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  a.href = url; a.download = "tasks_export.json";
+  document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 };
-
-// ייבוא
 $("#fileImport").addEventListener("change", async (ev)=>{
   const file = ev.target.files[0];
   if(!file) return;
   const txt = await file.text();
-  try{
-    const json = JSON.parse(txt);
-    await api("/import", "POST", json);
-    await syncState(true);
-  }catch(e){
-    alert("קובץ ייבוא לא תקין.");
-  }finally{
-    ev.target.value = "";
-  }
+  try{ await api("/import", "POST", JSON.parse(txt)); await syncState(true); }
+  catch{ alert("קובץ ייבוא לא תקין."); }
+  finally{ ev.target.value = ""; }
 });
 
-/* ✅ לולאת עדכון חלקה למסך */
+// לולאת זמן
 setInterval(()=>{
-  const running = tasks.find(t=>t.status==="running");
-  if(running){
-    running.remaining = Math.max(0, running.remaining - 1);
-    if(running.remaining === 0) {
-      running.status = "done";
-      frozenLayout = null;
-    }
-  }
-  // עדכון “נותר” על המסך
-  document.querySelectorAll(".remain").forEach(span=>{
-    const t=tasks.find(x=>x.id==span.dataset.id);
-    if(t) span.textContent=fmt(t.remaining);
-  });
-
-  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  // אם אין רצה — אפשר לחשב סוף כולל מקומי; אם יש — נשאיר מהשרת (יציב)
-  if(!tasks.some(t=>t.status==="running")){
-    $("#overallEnd").textContent = computeOverallEndLocal();
-  }
-}, 1000);
+  const run = tasks.find(t=>t.status==="running");
+  if(run) run.remaining = Math.max(0, run.remaining-1);
+  $("#now").textContent = new Date().toLocaleTimeString("he-IL",{hour12:false});
+  $("#overallEnd").textContent = computeOverallEndLocal();
+  renderTasks();
+},1000);
 
 // סינכרון מהשרת
-setInterval(()=>syncState(false), 2500);
+setInterval(()=>syncState(false), 4000);
 syncState(true);
 </script>
 </body>
