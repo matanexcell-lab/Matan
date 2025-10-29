@@ -79,7 +79,7 @@
 const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
-let isTyping = false;
+let isTyping = false; // ⬅️ חדש — מצב "עריכה פעילה"
 
 function fmt(t){
   t=Math.max(0,parseInt(t));
@@ -117,6 +117,7 @@ function computeOverallEndLocal(){
 
 async function syncState(force=false){
   if(syncing && !force) return;
+  if(isTyping) return; // ⬅️ חדש — לא נעדכן בזמן עריכה
   syncing = true;
   const data = await api("/state");
   syncing = false;
@@ -127,7 +128,7 @@ async function syncState(force=false){
 }
 
 function renderTasks(){
-  if(isTyping) return;
+  if(isTyping) return; // ⬅️ לא נרנדר בזמן עריכה
   const tb=$("#tbody");
   tb.innerHTML="";
   const layout = computeTimesLayout();
@@ -173,7 +174,12 @@ function renderTasks(){
       </td>`;
     tb.appendChild(tr);
 
-    // טיפול בשדה עבודה
+    // 🟣 ניהול מצב עריכה
+    tr.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focus", ()=> isTyping = true);
+      inp.addEventListener("blur", ()=> setTimeout(()=> isTyping = false, 300));
+    });
+
     tr.querySelector(".work-flag").addEventListener("change",async(e)=>{
       await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
       await syncState(true);
@@ -181,7 +187,6 @@ function renderTasks(){
   });
 }
 
-// 🟢 עריכה מלאה — שם וזמן
 async function updateTask(id){
   const row = document.getElementById("row-" + id);
   if(!row) return;
@@ -192,7 +197,6 @@ async function updateTask(id){
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
-
 async function extendTask(id){
   const row = document.getElementById("row-" + id);
   const h=parseInt(row.querySelector(".ext-h").value)||0;
@@ -209,7 +213,6 @@ async function moveTask(id){
 }
 async function action(url){ await api(url,"POST"); await syncState(true); }
 
-// הוספת משימה
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0, m=parseInt($("#newM").value)||0, s=parseInt($("#newS").value)||0;
@@ -218,7 +221,6 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-// ייצוא / ייבוא
 $("#btnExport").onclick = async ()=>{
   const res = await fetch("/export");
   const blob = await res.blob();
@@ -237,16 +239,14 @@ $("#fileImport").addEventListener("change", async (ev)=>{
   finally{ ev.target.value = ""; }
 });
 
-// לולאת זמן
 setInterval(()=>{
   const run = tasks.find(t=>t.status==="running");
   if(run) run.remaining = Math.max(0, run.remaining-1);
   $("#now").textContent = new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent = computeOverallEndLocal();
-  renderTasks();
+  if(!isTyping) renderTasks();
 },1000);
 
-// סינכרון מהשרת
 setInterval(()=>syncState(false), 4000);
 syncState(true);
 </script>
