@@ -176,7 +176,7 @@ function renderTasks(){
       </td>`;
     tb.appendChild(tr);
 
-    // 🟣 מצב עריכה — מונע רענון + שומר אוטומטית כשמסיים להקליד
+    // 🟣 שמירה אוטומטית כשמסיים לערוך שדה (גם אם המקלדת נסגרת)
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus", ()=> isTyping = true);
       inp.addEventListener("blur", async ()=>{
@@ -185,9 +185,9 @@ function renderTasks(){
         const h = parseInt(tr.querySelector(".edit-h").value)||0;
         const m = parseInt(tr.querySelector(".edit-m").value)||0;
         const s = parseInt(tr.querySelector(".edit-s").value)||0;
-        blockRenderUntil = Date.now() + 1000;
+        blockRenderUntil = Date.now() + 1200;
         await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-        setTimeout(()=> isTyping = false, 500);
+        setTimeout(()=> isTyping = false, 600);
       });
     });
 
@@ -210,5 +210,68 @@ async function updateTask(id){
   await syncState(true);
 }
 
-// שאר הקוד נשאר זהה (extendTask, moveTask, action, add, export/import וכו')...
-// ⬇️
+async function extendTask(id){
+  const row = document.getElementById("row-" + id);
+  const h=parseInt(row.querySelector(".ext-h").value)||0;
+  const m=parseInt(row.querySelector(".ext-m").value)||0;
+  const s=parseInt(row.querySelector(".ext-s").value)||0;
+  blockRenderUntil = Date.now() + 1000;
+  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
+  await syncState(true);
+}
+
+async function moveTask(id){
+  const row = document.getElementById("row-" + id);
+  const newPos=parseInt(row.querySelector(".move-to").value)||1;
+  blockRenderUntil = Date.now() + 1000;
+  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  await syncState(true);
+}
+
+async function action(url){ 
+  blockRenderUntil = Date.now() + 1000;
+  await api(url,"POST"); 
+  await syncState(true); 
+}
+
+$("#btnAdd").onclick=async()=>{
+  const n=$("#newName").value.trim()||"משימה חדשה";
+  const h=parseInt($("#newH").value)||0, m=parseInt($("#newM").value)||0, s=parseInt($("#newS").value)||0;
+  blockRenderUntil = Date.now() + 1000;
+  await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
+  $("#newName").value=""; $("#newH").value=0; $("#newM").value=0; $("#newS").value=0;
+  await syncState(true);
+};
+
+$("#btnExport").onclick = async ()=>{
+  const res = await fetch("/export");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "tasks_export.json";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+};
+
+$("#fileImport").addEventListener("change", async (ev)=>{
+  const file = ev.target.files[0];
+  if(!file) return;
+  const txt = await file.text();
+  try{ await api("/import", "POST", JSON.parse(txt)); await syncState(true); }
+  catch{ alert("קובץ ייבוא לא תקין."); }
+  finally{ ev.target.value = ""; }
+});
+
+setInterval(()=>{
+  const run = tasks.find(t=>t.status==="running");
+  if(run) run.remaining = Math.max(0, run.remaining-1);
+  $("#now").textContent = new Date().toLocaleTimeString("he-IL",{hour12:false});
+  $("#overallEnd").textContent = computeOverallEndLocal();
+  if(!isTyping && Date.now() > blockRenderUntil) renderTasks();
+},1000);
+
+setInterval(()=>syncState(false), 4000);
+syncState(true);
+</script>
+</body>
+</html>
