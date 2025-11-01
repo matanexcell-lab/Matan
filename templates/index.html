@@ -13,16 +13,16 @@
     input[type="text"] { width: 180px; }
     .muted { color: #777; font-size: 12px; }
     .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; transition: background-color 0.4s ease; }
-    .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
-    .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
-    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
+    .running { background:#d9ffd9; }
+    .paused  { background:#fff0b3; }
+    .pending { background:#f2f2f2; }
+    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; }
     button { cursor:pointer; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
     .edit-grid, .extend-grid, .move-grid {
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
-    tr { transition: background-color 0.4s ease; }
+    tr { transition: background-color 0.3s ease; }
     .toolbar { text-align:center; margin-bottom:10px }
     .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
     .work-col { width: 42px; }
@@ -79,8 +79,7 @@
 const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
-let isTyping = false;
-let blockRenderUntil = 0;
+let isEditing = false;
 
 function fmt(t){
   t=Math.max(0,parseInt(t));
@@ -95,58 +94,55 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-function computeTimesLayout(){
-  const now = Date.now();
-  let totalOffset = 0;
-  const layout = [];
-  for (const t of tasks){
-    const start = now + totalOffset * 1000;
-    totalOffset += Math.max(0, t.remaining);
-    const end = now + totalOffset * 1000;
+function computeLayout(){
+  const now=Date.now();
+  let offset=0;
+  const layout=[];
+  for(const t of tasks){
+    const start=now+offset*1000;
+    offset+=Math.max(0,t.remaining);
+    const end=now+offset*1000;
     layout.push({id:t.id,start,end});
   }
   return layout;
 }
 
 function computeOverallEndLocal(){
-  const layout = computeTimesLayout();
-  if (layout.length === 0) return "-";
-  const end = layout[layout.length-1].end;
-  const dt = new Date(end);
-  return dt.toLocaleTimeString("he-IL",{hour12:false});
+  const layout=computeLayout();
+  if(layout.length===0) return "-";
+  const end=new Date(layout[layout.length-1].end);
+  return end.toLocaleTimeString("he-IL",{hour12:false});
 }
 
 async function syncState(force=false){
-  if(syncing && !force) return;
-  if(isTyping) return;
-  if(Date.now() < blockRenderUntil) return;
-  syncing = true;
-  const data = await api("/state");
-  syncing = false;
-  if(!data || !data.ok) return;
-  tasks = data.tasks;
-  $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
+  if(syncing||isEditing) return;
+  syncing=true;
+  const data=await api("/state");
+  syncing=false;
+  if(!data||!data.ok) return;
+  tasks=data.tasks;
+  $("#workTotal").textContent=data.work_total_hhmmss||"00:00:00";
   renderTasks();
 }
 
 function renderTasks(){
-  if(isTyping || Date.now() < blockRenderUntil) return;
   const tb=$("#tbody");
+  if(isEditing) return;
+  const layout=computeLayout();
   tb.innerHTML="";
-  const layout = computeTimesLayout();
   tasks.forEach((t,i)=>{
-    const lay = layout.find(x=>x.id===t.id);
-    const startStr = lay ? new Date(lay.start).toLocaleTimeString("he-IL",{hour12:false}) : "-";
-    const endStr   = lay ? new Date(lay.end).toLocaleTimeString("he-IL",{hour12:false})   : "-";
-    const tr=document.createElement("tr");
-    tr.id = "row-" + t.id;
-    tr.className=t.status;
+    const lay=layout.find(x=>x.id===t.id);
+    const startStr=lay?new Date(lay.start).toLocaleTimeString("he-IL",{hour12:false}):"-";
+    const endStr=lay?new Date(lay.end).toLocaleTimeString("he-IL",{hour12:false}):"-";
     const canEdit=(t.status!=="running");
+    const tr=document.createElement("tr");
+    tr.id="row-"+t.id;
+    tr.className=t.status;
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
+      <td><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
       <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
-      <td><span>${fmt(t.remaining)}</span></td>
+      <td class="remain">${fmt(t.remaining)}</td>
       <td>${startStr}</td>
       <td>${endStr}</td>
       <td>${t.status}</td>
@@ -176,18 +172,16 @@ function renderTasks(){
       </td>`;
     tb.appendChild(tr);
 
-    // 🟣 שמירה אוטומטית כשמסיים לערוך שדה (גם אם המקלדת נסגרת)
+    // לא מרענן אם עורכים
     tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focus", ()=> isTyping = true);
-      inp.addEventListener("blur", async ()=>{
-        const id = t.id;
-        const nm = tr.querySelector(".edit-name").value.trim() || t.name;
-        const h = parseInt(tr.querySelector(".edit-h").value)||0;
-        const m = parseInt(tr.querySelector(".edit-m").value)||0;
-        const s = parseInt(tr.querySelector(".edit-s").value)||0;
-        blockRenderUntil = Date.now() + 1200;
-        await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-        setTimeout(()=> isTyping = false, 600);
+      inp.addEventListener("focus",()=>isEditing=true);
+      inp.addEventListener("blur",async()=>{
+        const nm=tr.querySelector(".edit-name").value;
+        const h=parseInt(tr.querySelector(".edit-h").value)||0;
+        const m=parseInt(tr.querySelector(".edit-m").value)||0;
+        const s=parseInt(tr.querySelector(".edit-s").value)||0;
+        await api(`/update/${t.id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
+        setTimeout(()=>{isEditing=false;syncState(true);},500);
       });
     });
 
@@ -199,78 +193,73 @@ function renderTasks(){
 }
 
 async function updateTask(id){
-  const row = document.getElementById("row-" + id);
-  if(!row) return;
-  const nm = row.querySelector(".edit-name").value.trim() || "משימה";
-  const h = parseInt(row.querySelector(".edit-h").value)||0;
-  const m = parseInt(row.querySelector(".edit-m").value)||0;
-  const s = parseInt(row.querySelector(".edit-s").value)||0;
-  blockRenderUntil = Date.now() + 1000;
+  const row=$("#row-"+id);
+  const nm=row.querySelector(".edit-name").value;
+  const h=parseInt(row.querySelector(".edit-h").value)||0;
+  const m=parseInt(row.querySelector(".edit-m").value)||0;
+  const s=parseInt(row.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 
 async function extendTask(id){
-  const row = document.getElementById("row-" + id);
+  const row=$("#row-"+id);
   const h=parseInt(row.querySelector(".ext-h").value)||0;
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
-  blockRenderUntil = Date.now() + 1000;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 
 async function moveTask(id){
-  const row = document.getElementById("row-" + id);
-  const newPos=parseInt(row.querySelector(".move-to").value)||1;
-  blockRenderUntil = Date.now() + 1000;
-  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  const row=$("#row-"+id);
+  const pos=parseInt(row.querySelector(".move-to").value)||1;
+  await api("/reorder_single","POST",{task_id:id,new_position:pos});
   await syncState(true);
 }
 
-async function action(url){ 
-  blockRenderUntil = Date.now() + 1000;
-  await api(url,"POST"); 
-  await syncState(true); 
-}
+async function action(url){await api(url,"POST");await syncState(true);}
 
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
-  const h=parseInt($("#newH").value)||0, m=parseInt($("#newM").value)||0, s=parseInt($("#newS").value)||0;
-  blockRenderUntil = Date.now() + 1000;
+  const h=parseInt($("#newH").value)||0;
+  const m=parseInt($("#newM").value)||0;
+  const s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
-  $("#newName").value=""; $("#newH").value=0; $("#newM").value=0; $("#newS").value=0;
+  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
   await syncState(true);
 };
 
-$("#btnExport").onclick = async ()=>{
-  const res = await fetch("/export");
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = "tasks_export.json";
-  document.body.appendChild(a); a.click(); a.remove();
+$("#btnExport").onclick=async()=>{
+  const res=await fetch("/export");
+  const blob=await res.blob();
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;a.download="tasks_export.json";document.body.appendChild(a);a.click();a.remove();
   URL.revokeObjectURL(url);
 };
 
-$("#fileImport").addEventListener("change", async (ev)=>{
-  const file = ev.target.files[0];
-  if(!file) return;
-  const txt = await file.text();
-  try{ await api("/import", "POST", JSON.parse(txt)); await syncState(true); }
-  catch{ alert("קובץ ייבוא לא תקין."); }
-  finally{ ev.target.value = ""; }
+$("#fileImport").addEventListener("change",async ev=>{
+  const file=ev.target.files[0];if(!file)return;
+  const txt=await file.text();
+  try{await api("/import","POST",JSON.parse(txt));await syncState(true);}
+  catch{alert("קובץ לא תקין.");}
+  ev.target.value="";
 });
 
 setInterval(()=>{
-  const run = tasks.find(t=>t.status==="running");
-  if(run) run.remaining = Math.max(0, run.remaining-1);
-  $("#now").textContent = new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent = computeOverallEndLocal();
-  if(!isTyping && Date.now() > blockRenderUntil) renderTasks();
+  const run=tasks.find(t=>t.status==="running");
+  if(run)run.remaining=Math.max(0,run.remaining-1);
+  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
+  $("#overallEnd").textContent=computeOverallEndLocal();
+  document.querySelectorAll(".remain").forEach(span=>{
+    const id=parseInt(span.parentElement.parentElement.id.split("-")[1]);
+    const t=tasks.find(x=>x.id===id);
+    if(t)span.textContent=fmt(t.remaining);
+  });
 },1000);
 
-setInterval(()=>syncState(false), 4000);
+setInterval(()=>syncState(false),4000);
 syncState(true);
 </script>
 </body>
