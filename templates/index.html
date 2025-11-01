@@ -4,28 +4,39 @@
   <meta charset="utf-8"/>
   <title>⏱️ טיימר משימות</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
+
   <style>
-    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
-    h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
-    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
+    :root { --gap:8px; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; margin:0; }
+    h1 { text-align:center; margin:16px 8px 6px; }
+    .toolbar { text-align:center; margin:0 8px 10px; }
+    .muted { color:#777; font-size:12px; }
+    .tools { display:flex; gap:var(--gap); flex-wrap:wrap; justify-content:center; margin:0 8px 12px; }
+    .tools span { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
     input[type="number"] { width: 64px; }
     input[type="text"] { width: 180px; }
-    .muted { color: #777; font-size: 12px; }
-    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
+    button { cursor:pointer; }
+
+    table { width:100%; border-collapse:collapse; margin:0; background:#fff; }
+    th, td { border:1px solid #999; padding:6px; text-align:center; }
+    .work-col { width:42px; }
+    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
+    .edit-grid, .extend-grid, .move-grid { display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap; }
+
+    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px; }
+    tr { transition: background-color .25s ease; }
     .running { background:#d9ffd9; }
     .paused  { background:#fff0b3; }
-    .pending { background:#f2f2f2; }
-    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; }
-    button { cursor:pointer; }
-    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid, .extend-grid, .move-grid {
-      display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
-    }
-    tr { transition: background-color 0.3s ease; }
-    .toolbar { text-align:center; margin-bottom:10px }
-    .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
-    .work-col { width: 42px; }
+    .pending { background:#f5f5f5; }
+    .done    { background:#ececec; color:#666; text-decoration:line-through; }
+
+    /* בזמן עריכה – נועלים פריסה כדי לא “לקפוץ” */
+    body.editing { position: relative; }
+    body.editing #tbody tr input, body.editing #tbody tr button { touch-action: none; }
+
+    /* תאים שמתעדכנים “חם” בלי רינדור מלא */
+    .remain { font-variant-numeric: tabular-nums; }
   </style>
 </head>
 <body>
@@ -39,6 +50,7 @@
 </div>
 
 <div class="tools">
+  <!-- הוספת משימה -->
   <span>
     <input id="newName" type="text" placeholder="שם משימה">
     <input id="newH" type="number" min="0" value="0"> שעות
@@ -47,6 +59,7 @@
     <button id="btnAdd">➕ הוסף</button>
   </span>
 
+  <!-- ייצוא/ייבוא -->
   <span>
     <button id="btnExport">📤 ייצא</button>
     <label style="cursor:pointer">
@@ -76,190 +89,281 @@
 </table>
 
 <script>
+/* ========= Utilities ========= */
 const $ = s => document.querySelector(s);
+const tzFmt = new Intl.DateTimeFormat('he-IL',{timeZone:'Asia/Jerusalem', hour12:false, hour:'2-digit', minute:'2-digit', second:'2-digit'});
+const fmt = t => { t=Math.max(0,parseInt(t||0)); let h=t/3600|0, m=(t%3600)/60|0, s=t%60; return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`; };
+const badgeClass = st => st==='running'?'badge running':st==='paused'?'badge paused':st==='pending'?'badge pending':'badge done';
+async function api(url,method='GET',body=null){ try{ const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null}); return await r.json(); }catch{return null;} }
+
+/* ========= State ========= */
 let tasks = [];
+let frozenLayout = null;      // לוח זמנים יציב על המסך
+let isEditing = false;        // במצב עריכה – לא מרנדרים מחדש
+let editRowId = null;         // שורה שנערכת
+let pendingSnapshot = null;   // צילום מצב שהגיע מהשרת בזמן עריכה
 let syncing = false;
-let isEditing = false;
+let lastSync = 0;
 
-function fmt(t){
-  t=Math.max(0,parseInt(t));
-  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
-  return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
-}
+/* ========= Timing helpers ========= */
+function computeTimesOnce(){
+  const now = Date.now();
+  const n = tasks.length;
+  const r = tasks.findIndex(t=>t.status==='running');
+  const layout = [];
 
-async function api(url, method="GET", body=null){
-  try{
-    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
-    return await res.json();
-  }catch{return null;}
-}
+  if (r === -1) {
+    let base = now;
+    for (let i=0;i<n;i++){
+      const dur = Math.max(0,tasks[i].remaining)*1000;
+      layout.push({id:tasks[i].id,start:base,end:base+dur});
+      base += dur;
+    }
+  } else {
+    const run = tasks[r];
+    const elapsed = Math.max(0, run.duration - run.remaining);
+    const startRun = now - elapsed*1000;
+    const endRun   = startRun + run.duration*1000;
 
-function computeLayout(){
-  const now=Date.now();
-  let offset=0;
-  const layout=[];
-  for(const t of tasks){
-    const start=now+offset*1000;
-    offset+=Math.max(0,t.remaining);
-    const end=now+offset*1000;
-    layout.push({id:t.id,start,end});
+    let end = startRun;
+    for (let i=r-1;i>=0;i--){
+      const dur = Math.max(0,tasks[i].remaining)*1000;
+      layout.unshift({id:tasks[i].id,start:end-dur,end:end});
+      end -= dur;
+    }
+    layout.push({id:run.id,start:startRun,end:endRun});
+    let start = endRun;
+    for (let i=r+1;i<n;i++){
+      const dur = Math.max(0,tasks[i].remaining)*1000;
+      layout.push({id:tasks[i].id,start:start,end:start+dur});
+      start += dur;
+    }
   }
-  return layout;
+  frozenLayout = layout;
 }
 
 function computeOverallEndLocal(){
-  const layout=computeLayout();
-  if(layout.length===0) return "-";
-  const end=new Date(layout[layout.length-1].end);
-  return end.toLocaleTimeString("he-IL",{hour12:false});
+  const nowMs = Date.now();
+  let total = 0;
+  for (const t of tasks) if (['running','paused','pending'].includes(t.status)) total += t.remaining;
+  return total ? tzFmt.format(new Date(nowMs + total*1000)) : '-';
+}
+
+/* ========= Render ========= */
+function renderTasks(full=true){
+  if (!full) { updateHotCellsOnly(); return; }
+
+  const tb = $("#tbody");
+  tb.innerHTML = "";
+  if (!frozenLayout) computeTimesOnce();
+
+  tasks.forEach((t,i)=>{
+    const tr = document.createElement('tr');
+    tr.id = `row-${t.id}`;
+    tr.className = t.status;
+
+    const layout = frozenLayout?.find(x=>x.id===t.id) || null;
+    const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
+    const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
+    const canEdit  = (t.status!=='running');
+
+    tr.innerHTML = `
+      <td>${i+1}</td>
+      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""} title="סמן כעבודה"></td>
+      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
+      <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
+      <td><span class="start-cell">${startStr}</span></td>
+      <td><span class="end-cell">${endStr}</span></td>
+      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
+      <td>
+        <div class="edit-grid">
+          <input class="edit-h" type="number" min="0" value="${(t.duration/3600|0)}" ${canEdit?"":"disabled"}>:
+          <input class="edit-m" type="number" min="0" value="${((t.duration%3600)/60|0)}" ${canEdit?"":"disabled"}>:
+          <input class="edit-s" type="number" min="0" value="${(t.duration%60)}" ${canEdit?"":"disabled"}>
+          <button ${canEdit?"":"disabled"} class="btn-update">עדכן</button>
+        </div>
+      </td>
+      <td>
+        <div class="extend-grid">
+          <input class="ext-h" type="number" min="0" value="0">:
+          <input class="ext-m" type="number" min="0" value="0">:
+          <input class="ext-s" type="number" min="0" value="0">
+          <button class="btn-extend">הארך</button>
+        </div>
+      </td>
+      <td>
+        <div class="move-grid">
+          <input class="move-to" type="number" min="1" value="${i+1}">
+          <button class="btn-move">העבר</button>
+        </div>
+      </td>
+      <td class="row-actions">
+        <button class="act-start">התחל</button>
+        <button class="act-pause">השהה</button>
+        <button class="act-reset">איפוס</button>
+        <button class="act-pending">Pending</button>
+        <button class="act-skip">דלג</button>
+        <button class="act-del">מחק</button>
+      </td>`;
+
+    /* מאזיני “עריכה לא קופצת” */
+    tr.querySelectorAll("input").forEach(inp=>{
+      const setEditing = () => { isEditing=true; editRowId=t.id; document.body.classList.add('editing'); };
+      const clearEditing = () => {
+        // השהייה קטנה כדי לאפשר מקש “עדכן” מיד לאחר סגירת מקלדת
+        setTimeout(()=>{ isEditing=false; editRowId=null; document.body.classList.remove('editing'); if(pendingSnapshot){ applySnapshot(pendingSnapshot); pendingSnapshot=null; } }, 200);
+      };
+      inp.addEventListener('focus', setEditing, {passive:true});
+      inp.addEventListener('touchstart', setEditing, {passive:true});
+      inp.addEventListener('blur', clearEditing);
+    });
+
+    /* פעולות */
+    tr.querySelector(".work-flag").addEventListener("change", async e=>{
+      await api(`/workflag/${t.id}`,'POST',{is_work:e.target.checked});
+      t.is_work = e.target.checked;
+      await syncState(true);
+    });
+
+    tr.querySelector(".btn-update").addEventListener("click", async ()=>{
+      const nm = tr.querySelector(".edit-name").value;
+      const h  = +tr.querySelector(".edit-h").value||0;
+      const m  = +tr.querySelector(".edit-m").value||0;
+      const s  = +tr.querySelector(".edit-s").value||0;
+      await api(`/update/${t.id}`,'POST',{name:nm,hours:h,minutes:m,seconds:s});
+      isEditing=false; editRowId=null; document.body.classList.remove('editing');
+      await syncState(true);
+    });
+
+    tr.querySelector(".btn-extend").addEventListener("click", async ()=>{
+      const h=+tr.querySelector(".ext-h").value||0, m=+tr.querySelector(".ext-m").value||0, s=+tr.querySelector(".ext-s").value||0;
+      await api(`/extend/${t.id}`,'POST',{hours:h,minutes:m,seconds:s});
+      await syncState(true);
+    });
+
+    tr.querySelector(".btn-move").addEventListener("click", async ()=>{
+      const newPos = +tr.querySelector(".move-to").value||1;
+      await api("/reorder_single",'POST',{task_id:t.id,new_position:newPos});
+      await syncState(true);
+    });
+
+    const doAction = async (path, optimistic)=>{
+      optimistic(); updateRowStatus(t.id, tasks.find(x=>x.id===t.id)?.status || t.status);
+      await api(path,'POST'); await syncState(true);
+    };
+
+    tr.querySelector(".act-start").addEventListener("click", ()=>doAction(`/start/${t.id}`,()=>{ t.status='running'; frozenLayout=null; }));
+    tr.querySelector(".act-pause").addEventListener("click", ()=>doAction(`/pause/${t.id}`,()=>{ t.status='paused'; frozenLayout=null; }));
+    tr.querySelector(".act-reset").addEventListener("click", ()=>doAction(`/reset/${t.id}`,()=>{ t.status='running'; t.remaining=t.duration; frozenLayout=null; }));
+    tr.querySelector(".act-pending").addEventListener("click", ()=>doAction(`/set_pending/${t.id}`,()=>{ t.status='pending'; frozenLayout=null; }));
+    tr.querySelector(".act-skip").addEventListener("click", ()=>doAction(`/skip/${t.id}`,()=>{ t.status='done'; frozenLayout=null; }));
+    tr.querySelector(".act-del").addEventListener("click", ()=>doAction(`/delete/${t.id}`,()=>{ tasks = tasks.filter(x=>x.id!==t.id); frozenLayout=null; }));
+    tb.appendChild(tr);
+  });
+}
+
+function updateRowStatus(id,status){
+  const row = document.getElementById(`row-${id}`);
+  if(!row) return;
+  row.className = status;
+  const badge = row.querySelector("td:nth-child(7) span");
+  if (badge) { badge.className = badgeClass(status); badge.textContent = status; }
+}
+
+/* בזמן עריכה – לא מרנדרים מלא; מעדכנים רק “נותר” ושעונים בראש */
+function updateHotCellsOnly(){
+  // נעדכן שניות רצות
+  const running = tasks.find(t=>t.status==='running');
+  if (running) {
+    running.remaining = Math.max(0, running.remaining - 1);
+    if (running.remaining === 0) { running.status='done'; frozenLayout=null; }
+  }
+  document.querySelectorAll(".remain").forEach(span=>{
+    const t = tasks.find(x=>x.id==span.dataset.id);
+    if(t) span.textContent = fmt(t.remaining);
+  });
+
+  // שעון וכותרות
+  $("#now").textContent = new Date().toLocaleTimeString('he-IL',{hour12:false});
+  if(!tasks.some(t=>t.status==='running')) $("#overallEnd").textContent = computeOverallEndLocal();
+}
+
+/* ========= Sync with server ========= */
+function applySnapshot(snap){
+  tasks = snap.tasks;
+  $("#workTotal").textContent = snap.work_total_hhmmss || "00:00:00";
+  $("#overallEnd").textContent = snap.overall_end_time || "-";
+  $("#now").textContent = snap.now || "";
+  if (!tasks.some(t=>t.status==='running')) frozenLayout=null;
+  renderTasks(true);
 }
 
 async function syncState(force=false){
-  if(syncing||isEditing) return;
-  syncing=true;
-  const data=await api("/state");
-  syncing=false;
-  if(!data||!data.ok) return;
-  tasks=data.tasks;
-  $("#workTotal").textContent=data.work_total_hhmmss||"00:00:00";
-  renderTasks();
-}
+  const now = Date.now();
+  if (syncing) return;
+  if (!force && now - lastSync < 2000) return;
+  syncing = true;
+  const data = await api("/state");
+  syncing = false; lastSync = now;
+  if(!data || !data.ok) return;
 
-function renderTasks(){
-  const tb=$("#tbody");
-  if(isEditing) return;
-  const layout=computeLayout();
-  tb.innerHTML="";
-  tasks.forEach((t,i)=>{
-    const lay=layout.find(x=>x.id===t.id);
-    const startStr=lay?new Date(lay.start).toLocaleTimeString("he-IL",{hour12:false}):"-";
-    const endStr=lay?new Date(lay.end).toLocaleTimeString("he-IL",{hour12:false}):"-";
-    const canEdit=(t.status!=="running");
-    const tr=document.createElement("tr");
-    tr.id="row-"+t.id;
-    tr.className=t.status;
-    tr.innerHTML=`
-      <td>${i+1}</td>
-      <td><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
-      <td><input class="edit-name" type="text" value="${t.name}" ${canEdit?"":"disabled"}></td>
-      <td class="remain">${fmt(t.remaining)}</td>
-      <td>${startStr}</td>
-      <td>${endStr}</td>
-      <td>${t.status}</td>
-      <td>
-        <input class="edit-h" type="number" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
-        <input class="edit-m" type="number" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
-        <input class="edit-s" type="number" value="${t.duration%60}" ${canEdit?"":"disabled"}>
-        <button onclick="updateTask(${t.id})" ${canEdit?"":"disabled"}>עדכן</button>
-      </td>
-      <td>
-        <input class="ext-h" type="number" value="0">:
-        <input class="ext-m" type="number" value="0">:
-        <input class="ext-s" type="number" value="0">
-        <button onclick="extendTask(${t.id})">הארך</button>
-      </td>
-      <td>
-        <input class="move-to" type="number" min="1" value="${i+1}">
-        <button onclick="moveTask(${t.id})">העבר</button>
-      </td>
-      <td>
-        <button onclick="action('/start/${t.id}')">התחל</button>
-        <button onclick="action('/pause/${t.id}')">השהה</button>
-        <button onclick="action('/reset/${t.id}')">אפס</button>
-        <button onclick="action('/set_pending/${t.id}')">Pending</button>
-        <button onclick="action('/skip/${t.id}')">דלג</button>
-        <button onclick="action('/delete/${t.id}')">מחק</button>
-      </td>`;
-    tb.appendChild(tr);
-
-    // לא מרענן אם עורכים
-    tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focus",()=>isEditing=true);
-      inp.addEventListener("blur",async()=>{
-        const nm=tr.querySelector(".edit-name").value;
-        const h=parseInt(tr.querySelector(".edit-h").value)||0;
-        const m=parseInt(tr.querySelector(".edit-m").value)||0;
-        const s=parseInt(tr.querySelector(".edit-s").value)||0;
-        await api(`/update/${t.id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-        setTimeout(()=>{isEditing=false;syncState(true);},500);
-      });
+  if (isEditing) {
+    // לא מיישמים כדי לא לקפוץ; נשמור צילום מצב
+    pendingSnapshot = {
+      tasks: data.tasks,
+      work_total_hhmmss: data.work_total_hhmmss,
+      overall_end_time: data.overall_end_time,
+      now: data.now
+    };
+  } else {
+    applySnapshot({
+      tasks: data.tasks,
+      work_total_hhmmss: data.work_total_hhmmss,
+      overall_end_time: data.overall_end_time,
+      now: data.now
     });
-
-    tr.querySelector(".work-flag").addEventListener("change",async(e)=>{
-      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
-      await syncState(true);
-    });
-  });
+  }
 }
 
-async function updateTask(id){
-  const row=$("#row-"+id);
-  const nm=row.querySelector(".edit-name").value;
-  const h=parseInt(row.querySelector(".edit-h").value)||0;
-  const m=parseInt(row.querySelector(".edit-m").value)||0;
-  const s=parseInt(row.querySelector(".edit-s").value)||0;
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-
-async function extendTask(id){
-  const row=$("#row-"+id);
-  const h=parseInt(row.querySelector(".ext-h").value)||0;
-  const m=parseInt(row.querySelector(".ext-m").value)||0;
-  const s=parseInt(row.querySelector(".ext-s").value)||0;
-  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-
-async function moveTask(id){
-  const row=$("#row-"+id);
-  const pos=parseInt(row.querySelector(".move-to").value)||1;
-  await api("/reorder_single","POST",{task_id:id,new_position:pos});
-  await syncState(true);
-}
-
-async function action(url){await api(url,"POST");await syncState(true);}
-
-$("#btnAdd").onclick=async()=>{
+/* ========= Top controls ========= */
+$("#btnAdd").addEventListener("click", async ()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
-  const h=parseInt($("#newH").value)||0;
-  const m=parseInt($("#newM").value)||0;
-  const s=parseInt($("#newS").value)||0;
+  const h=+$("#newH").value||0, m=+$("#newM").value||0, s=+$("#newS").value||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
-  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
+  $("#newName").value=""; $("#newH").value=0; $("#newM").value=0; $("#newS").value=0;
   await syncState(true);
-};
-
-$("#btnExport").onclick=async()=>{
-  const res=await fetch("/export");
-  const blob=await res.blob();
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;a.download="tasks_export.json";document.body.appendChild(a);a.click();a.remove();
-  URL.revokeObjectURL(url);
-};
-
-$("#fileImport").addEventListener("change",async ev=>{
-  const file=ev.target.files[0];if(!file)return;
-  const txt=await file.text();
-  try{await api("/import","POST",JSON.parse(txt));await syncState(true);}
-  catch{alert("קובץ לא תקין.");}
-  ev.target.value="";
 });
 
-setInterval(()=>{
-  const run=tasks.find(t=>t.status==="running");
-  if(run)run.remaining=Math.max(0,run.remaining-1);
-  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent=computeOverallEndLocal();
-  document.querySelectorAll(".remain").forEach(span=>{
-    const id=parseInt(span.parentElement.parentElement.id.split("-")[1]);
-    const t=tasks.find(x=>x.id===id);
-    if(t)span.textContent=fmt(t.remaining);
-  });
-},1000);
+$("#btnExport").addEventListener("click", async ()=>{
+  const res = await fetch("/export");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), {href:url, download:"tasks_export.json"});
+  document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+});
 
-setInterval(()=>syncState(false),4000);
+$("#fileImport").addEventListener("change", async ev=>{
+  const f = ev.target.files?.[0]; if(!f) return;
+  try { const txt = await f.text(); const json = JSON.parse(txt); await api("/import","POST",json); await syncState(true); }
+  catch { alert("קובץ ייבוא לא תקין."); }
+  finally { ev.target.value = ""; }
+});
+
+/* ========= Loops ========= */
+setInterval(()=>{
+  if (isEditing) { updateHotCellsOnly(); return; }
+  // ללא עריכה – עדכון חם זהה + ננסה לרענן פריסה רק כשאין ריצה
+  updateHotCellsOnly();
+}, 1000);
+
+setInterval(()=> syncState(false), 2500);
+
+/* אם עברנו לרקע – לא נערום סנכרונים; כשחוזרים – נשלים */
+document.addEventListener('visibilitychange', ()=>{
+  if (!document.hidden) syncState(true);
+});
+
+/* boot */
 syncState(true);
 </script>
 </body>
