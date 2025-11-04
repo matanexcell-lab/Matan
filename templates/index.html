@@ -108,10 +108,11 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
+// 🕒 חלון עריכה בטוח של 10 שניות
 function startEditLock(){
   isTyping = true;
   clearTimeout(editTimeout);
-  editTimeout = setTimeout(()=>{isTyping=false;},3000); // 🕒 שלוש שניות
+  editTimeout = setTimeout(()=>{isTyping=false;},10000);
 }
 
 function computeOverallEndLocal(){
@@ -164,7 +165,7 @@ function computeTimesOnce(){
 }
 
 async function syncState(force=false){
-  if(isTyping) return; // 🧠 בזמן כתיבה לא נוגעים
+  if(isTyping) return; 
   const now = Date.now();
   if(syncing) return;
   if(!force && now - lastServerSync < 2000) return;
@@ -240,7 +241,6 @@ function renderTasks(fromSync=false){
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
-
     tb.appendChild(tr);
 
     tr.querySelectorAll("input").forEach(inp=>{
