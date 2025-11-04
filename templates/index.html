@@ -81,6 +81,7 @@ let syncing = false;
 let lastServerSync = 0;
 let frozenLayout = null;
 let editTimeout = null;
+let autoSaveTimers = {};
 let isTyping = false;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
@@ -113,6 +114,11 @@ function startEditLock(){
   isTyping = true;
   clearTimeout(editTimeout);
   editTimeout = setTimeout(()=>{isTyping=false;},10000);
+}
+
+function autoSaveTask(id){
+  clearTimeout(autoSaveTimers[id]);
+  autoSaveTimers[id] = setTimeout(()=>updateTask(id,true),1000);
 }
 
 function computeOverallEndLocal(){
@@ -216,7 +222,6 @@ function renderTasks(fromSync=false){
           <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
           <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
           <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
-          <button ${canEdit?"":"disabled"} onclick="updateTask(${t.id})">עדכן</button>
         </div>
       </td>
       <td>
@@ -245,8 +250,12 @@ function renderTasks(fromSync=false){
 
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus", startEditLock);
-      inp.addEventListener("input", startEditLock);
-      inp.addEventListener("touchstart", startEditLock, {passive:true});
+      inp.addEventListener("input", e=>{
+        startEditLock();
+        const id = t.id;
+        if(["edit-name","edit-h","edit-m","edit-s"].some(c=>e.target.classList.contains(c)))
+          autoSaveTask(id);
+      });
     });
 
     tr.querySelector(".work-flag").addEventListener("change", async e=>{
@@ -258,17 +267,14 @@ function renderTasks(fromSync=false){
   });
 }
 
-async function updateTask(id){
+async function updateTask(id, silent=false){
   const row=$("#row-"+id);
   const nm=row.querySelector(".edit-name").value;
   const h=parseInt(row.querySelector(".edit-h").value)||0;
   const m=parseInt(row.querySelector(".edit-m").value)||0;
   const s=parseInt(row.querySelector(".edit-s").value)||0;
-  const t=tasks.find(x=>x.id===id);
-  if(t){ t.name=nm; t.duration=h*3600+m*60+s; t.remaining=t.duration; }
-  renderTasks(); // עדכון מיידי
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  await syncState(true);
+  if(!silent) await syncState(true);
 }
 
 async function extendTask(id){
@@ -276,9 +282,6 @@ async function extendTask(id){
   const h=parseInt(row.querySelector(".ext-h").value)||0;
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
-  const t=tasks.find(x=>x.id===id);
-  if(t){ t.remaining += h*3600+m*60+s; t.duration += h*3600+m*60+s; }
-  renderTasks();
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
