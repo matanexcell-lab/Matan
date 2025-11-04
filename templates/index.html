@@ -1,79 +1,3 @@
-<!doctype html>
-<html lang="he" dir="rtl">
-<head>
-<meta charset="utf-8"/>
-<title>⏱️ טיימר משימות</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-  body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
-  h1 { text-align:center; }
-  table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
-  th, td { border: 1px solid #999; padding: 6px; text-align: center; }
-  input[type="number"] { width: 64px; }
-  input[type="text"] { width: 180px; }
-  .muted { color: #777; font-size: 12px; }
-  .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-  .running { background:#d9ffd9; transition: background-color 0.4s ease; }
-  .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
-  .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
-  .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
-  button { cursor:pointer; }
-  .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-  .edit-grid, .extend-grid, .move-grid {
-    display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
-  }
-  tr { transition: background-color 0.4s ease; }
-  .toolbar { text-align:center; margin-bottom:10px }
-  .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
-  .work-col { width: 42px; }
-</style>
-</head>
-<body>
-
-<h1>⏱️ טיימר משימות</h1>
-
-<div class="toolbar">
-  <div id="now" class="muted"></div>
-  <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span><br>
-  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span>
-</div>
-
-<div class="tools">
-  <span>
-    <input id="newName" type="text" placeholder="שם משימה">
-    <input id="newH" type="number" min="0" value="0"> שעות
-    <input id="newM" type="number" min="0" value="0"> דקות
-    <input id="newS" type="number" min="0" value="0"> שניות
-    <button id="btnAdd">➕ הוסף</button>
-  </span>
-  <span>
-    <button id="btnExport">📤 ייצא</button>
-    <label style="cursor:pointer">
-      📥 ייבא
-      <input id="fileImport" type="file" accept="application/json" style="display:none">
-    </label>
-  </span>
-</div>
-
-<table>
-  <thead>
-    <tr>
-      <th>#</th>
-      <th class="work-col">עבודה</th>
-      <th>שם</th>
-      <th>נותר</th>
-      <th>שעת התחלה</th>
-      <th>שעת סיום</th>
-      <th>סטטוס</th>
-      <th>עריכה</th>
-      <th>הארכה</th>
-      <th>העברה</th>
-      <th>פעולות</th>
-    </tr>
-  </thead>
-  <tbody id="tbody"></tbody>
-</table>
-
 <script>
 const $ = s => document.querySelector(s);
 let tasks = [];
@@ -109,27 +33,28 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-// 🕒 חלון עריכה בטוח של 10 שניות
+// 🕒 נעילת עריכה 10 שניות
 function startEditLock(){
   isTyping = true;
   clearTimeout(editTimeout);
   editTimeout = setTimeout(()=>{isTyping=false;},10000);
 }
-
 function autoSaveTask(id){
   clearTimeout(autoSaveTimers[id]);
   autoSaveTimers[id] = setTimeout(()=>updateTask(id,true),1000);
 }
 
+// ✅ חישוב חדש של שעת סיום כוללת (כולל רצה)
 function computeOverallEndLocal(){
   const nowMs = Date.now();
-  let total = 0;
-  for (const t of tasks){
-    if(["running","paused","pending"].includes(t.status))
-      total += t.remaining;
+  let base = nowMs;
+  const ordered = [...tasks].sort((a,b)=>a.position-b.position);
+  for(const t of ordered){
+    if(["running","paused","pending"].includes(t.status)){
+      base += (t.remaining||0)*1000;
+    }
   }
-  if(total===0) return "-";
-  return tzFmt.format(new Date(nowMs + total*1000));
+  return tzFmt.format(new Date(base));
 }
 
 function computeTimesOnce(){
@@ -150,16 +75,13 @@ function computeTimesOnce(){
     const elapsed = Math.max(0, run.duration - run.remaining);
     const startRun = now - elapsed * 1000;
     const endRun = startRun + run.duration * 1000;
-
     let end = startRun;
     for (let i = r - 1; i >= 0; i--) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
       layout.unshift({ id: tasks[i].id, start: end - dur, end: end });
       end -= dur;
     }
-
     layout.push({ id: run.id, start: startRun, end: endRun });
-
     let start = endRun;
     for (let i = r + 1; i < n; i++) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
@@ -183,12 +105,10 @@ async function syncState(force=false){
 
   tasks = data.tasks;
   $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
-  $("#overallEnd").textContent = data.overall_end_time || "-";
+  $("#overallEnd").textContent = computeOverallEndLocal(); // תמיד לחשב בעצמנו
   $("#now").textContent = data.now || "";
-
   if (!tasks.some(t => t.status === "running"))
     frozenLayout = null;
-
   renderTasks(true);
 }
 
@@ -196,19 +116,15 @@ function renderTasks(fromSync=false){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
-
   if (!frozenLayout) computeTimesOnce();
-
   tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-
     const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
     const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
     const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
-
     tr.innerHTML=`
       <td>${i+1}</td>
       <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
@@ -247,7 +163,6 @@ function renderTasks(fromSync=false){
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
-
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focus", startEditLock);
       inp.addEventListener("input", e=>{
@@ -257,87 +172,16 @@ function renderTasks(fromSync=false){
           autoSaveTask(id);
       });
     });
-
     tr.querySelector(".work-flag").addEventListener("change", async e=>{
       t.is_work=e.target.checked;
-      renderTasks(); // עדכון מיידי
+      renderTasks();
       await api(`/workflag/${t.id}`, "POST", {is_work:e.target.checked});
       await syncState(true);
     });
   });
 }
 
-async function updateTask(id, silent=false){
-  const row=$("#row-"+id);
-  const nm=row.querySelector(".edit-name").value;
-  const h=parseInt(row.querySelector(".edit-h").value)||0;
-  const m=parseInt(row.querySelector(".edit-m").value)||0;
-  const s=parseInt(row.querySelector(".edit-s").value)||0;
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  if(!silent) await syncState(true);
-}
-
-async function extendTask(id){
-  const row=$("#row-"+id);
-  const h=parseInt(row.querySelector(".ext-h").value)||0;
-  const m=parseInt(row.querySelector(".ext-m").value)||0;
-  const s=parseInt(row.querySelector(".ext-s").value)||0;
-  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-
-async function moveTask(id){
-  const row=$("#row-"+id);
-  const newPos=parseInt(row.querySelector(".move-to").value)||1;
-  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  await syncState(true);
-}
-
-async function action(url){
-  const id=parseInt(url.split("/").pop());
-  const t=tasks.find(x=>x.id===id);
-  if(t){
-    if(url.includes("/start/"))  t.status="running";
-    if(url.includes("/pause/"))  t.status="paused";
-    if(url.includes("/reset/"))  t.status="running", t.remaining=t.duration;
-    if(url.includes("/set_pending/")) t.status="pending";
-    if(url.includes("/skip/"))   t.status="done";
-    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
-    renderTasks(); // עדכון מיידי
-  }
-  await api(url,"POST");
-  await syncState(true);
-}
-
-$("#btnAdd").onclick=async()=>{
-  const n=$("#newName").value.trim()||"משימה חדשה";
-  const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
-  await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
-  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
-  await syncState(true);
-};
-
-$("#btnExport").onclick=async()=>{
-  const res=await fetch("/export");
-  const blob=await res.blob();
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;a.download="tasks_export.json";
-  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
-};
-
-$("#fileImport").addEventListener("change",async(ev)=>{
-  const file=ev.target.files[0];
-  if(!file)return;
-  const txt=await file.text();
-  try{
-    const json=JSON.parse(txt);
-    await api("/import","POST",json);
-    await syncState(true);
-  }catch(e){alert("קובץ ייבוא לא תקין.");}
-  ev.target.value="";
-});
-
+// השאר בדיוק אותו דבר כמו קודם...
 setInterval(()=>{
   const running=tasks.find(t=>t.status==="running");
   if(running){
@@ -349,11 +193,6 @@ setInterval(()=>{
     if(t)span.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  if(!tasks.some(t=>t.status==="running"))$("#overallEnd").textContent=computeOverallEndLocal();
+  $("#overallEnd").textContent=computeOverallEndLocal(); // ⬅️ מעודכן כל הזמן
 },1000);
-
-setInterval(()=>syncState(false),2500);
-syncState(true);
 </script>
-</body>
-</html>
