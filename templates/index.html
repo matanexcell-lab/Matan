@@ -250,8 +250,9 @@ function renderTasks(fromSync=false){
     });
 
     tr.querySelector(".work-flag").addEventListener("change", async e=>{
-      await api(`/workflag/${t.id}`, "POST", {is_work:e.target.checked});
       t.is_work=e.target.checked;
+      renderTasks(); // עדכון מיידי
+      await api(`/workflag/${t.id}`, "POST", {is_work:e.target.checked});
       await syncState(true);
     });
   });
@@ -263,6 +264,9 @@ async function updateTask(id){
   const h=parseInt(row.querySelector(".edit-h").value)||0;
   const m=parseInt(row.querySelector(".edit-m").value)||0;
   const s=parseInt(row.querySelector(".edit-s").value)||0;
+  const t=tasks.find(x=>x.id===id);
+  if(t){ t.name=nm; t.duration=h*3600+m*60+s; t.remaining=t.duration; }
+  renderTasks(); // עדכון מיידי
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
@@ -272,6 +276,9 @@ async function extendTask(id){
   const h=parseInt(row.querySelector(".ext-h").value)||0;
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
+  const t=tasks.find(x=>x.id===id);
+  if(t){ t.remaining += h*3600+m*60+s; t.duration += h*3600+m*60+s; }
+  renderTasks();
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
@@ -284,6 +291,17 @@ async function moveTask(id){
 }
 
 async function action(url){
+  const id=parseInt(url.split("/").pop());
+  const t=tasks.find(x=>x.id===id);
+  if(t){
+    if(url.includes("/start/"))  t.status="running";
+    if(url.includes("/pause/"))  t.status="paused";
+    if(url.includes("/reset/"))  t.status="running", t.remaining=t.duration;
+    if(url.includes("/set_pending/")) t.status="pending";
+    if(url.includes("/skip/"))   t.status="done";
+    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
+    renderTasks(); // עדכון מיידי
+  }
   await api(url,"POST");
   await syncState(true);
 }
