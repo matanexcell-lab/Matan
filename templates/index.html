@@ -83,7 +83,7 @@ let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
 let isTyping = false;
-let frozenLayout = null; // לא זז כשיש רצה פעילה
+let frozenLayout = null;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -248,7 +248,7 @@ function renderTasks(){
 
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focusin", ()=>isTyping=true);
-      inp.addEventListener("focusout", ()=>isTyping=false);
+      inp.addEventListener("focusout", ()=>{ setTimeout(()=>{isTyping=false},10000); }); // ✅ לא סוגר מיד
       inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
     });
   });
@@ -262,14 +262,13 @@ async function action(url){
     if(url.includes("/pause/"))  t.status="paused";
     if(url.includes("/reset/"))  { t.status="running"; t.remaining=t.duration; }
     if(url.includes("/set_pending/")) t.status="pending";
-    if(url.includes("/skip/"))   t.status="done";
     if(url.includes("/done/"))   {t.status="done"; t.remaining=0;}
     if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
     frozenLayout=null;
     renderTasks(true);
   }
   await api(url,"POST");
-  await new Promise(r=>setTimeout(r,500)); // ההשהייה שמונעת קפיצות
+  await new Promise(r=>setTimeout(r,500)); // ✅ השהייה קלה
   await syncState(true);
 }
 
