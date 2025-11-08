@@ -6,11 +6,8 @@ from flask import Flask, jsonify, render_template, request, make_response
 from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine, text
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# ==============================
-# הגדרות בסיסיות
-# ==============================
 TZ = pytz.timezone("Asia/Jerusalem")
-DATABASE_URL = "sqlite:///tasks.db"  # אפשר להחליף ל-postgres אם אתה בענן
+DATABASE_URL = "sqlite:///tasks.db"  # אם אתה ברנדר - תחליף ל-Postgres
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
 Base = declarative_base()
@@ -27,8 +24,7 @@ def session_scope():
     finally:
         s.close()
 
-def now():
-    return datetime.now(TZ)
+def now(): return datetime.now(TZ)
 
 def hhmmss(total_seconds):
     total_seconds = max(0, int(total_seconds or 0))
@@ -37,9 +33,6 @@ def hhmmss(total_seconds):
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# ==============================
-# מודל המשימות
-# ==============================
 class Task(Base):
     __tablename__ = "tasks"
     id = Column(Integer, primary_key=True)
@@ -72,13 +65,9 @@ class Task(Base):
 
 Base.metadata.create_all(engine)
 
-# ==============================
-# Flask app
-# ==============================
 app = Flask(__name__)
 
 def recompute_chain():
-    """בודקת אם יש משימות רצות וסוגרת שהסתיימו"""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         now_ts = now()
@@ -107,12 +96,8 @@ def work_total_seconds():
         items = s.query(Task).filter(Task.is_work == True).all()
         return sum(int(x.duration or 0) for x in items)
 
-# ==============================
-# ROUTES
-# ==============================
 @app.route("/")
-def index():
-    return render_template("index.html")
+def index(): return render_template("index.html")
 
 @app.route("/state")
 def state():
@@ -132,9 +117,7 @@ def state():
 def add():
     data = request.json or {}
     name = (data.get("name") or "משימה חדשה").strip()
-    h = int(data.get("hours", 0))
-    m = int(data.get("minutes", 0))
-    ssec = int(data.get("seconds", 0))
+    h, m, ssec = int(data.get("hours", 0)), int(data.get("minutes", 0)), int(data.get("seconds", 0))
     dur = h * 3600 + m * 60 + ssec
     with session_scope() as s:
         pos = s.query(Task).count()
@@ -165,24 +148,21 @@ def pause(tid):
             s.add(t)
     return jsonify({"ok": True})
 
-@app.route("/set_pending/<int:task_id>", methods=["POST"])
-def set_pending(task_id):
-    """מסמן משימה כ־Pending ולא מחזירה לסטטוס אחר"""
+@app.route("/set_pending/<int:tid>", methods=["POST"])
+def set_pending(tid):
     with session_scope() as s:
-        t = s.get(Task, task_id)
-        if not t:
-            return jsonify({"ok": False, "error": "not found"}), 404
-        if t.status == "running" and t.end_time:
-            rem = int((t.end_time - now()).total_seconds())
-            t.remaining = max(0, rem)
-            t.end_time = None
-        t.status = "pending"
-        s.add(t)
+        t = s.get(Task, tid)
+        if t:
+            if t.end_time:
+                rem = int((t.end_time - now()).total_seconds())
+                t.remaining = max(0, rem)
+                t.end_time = None
+            t.status = "pending"
+            s.add(t)
     return jsonify({"ok": True})
 
 @app.route("/done/<int:tid>", methods=["POST"])
 def done(tid):
-    """מסמן משימה כ־Done"""
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
@@ -210,7 +190,7 @@ def update(tid):
         t = s.get(Task, tid)
         if not t: return jsonify({"ok": False}), 404
         if "name" in data: t.name = (data["name"] or "").strip()
-        h = int(data.get("hours", 0)); m = int(data.get("minutes", 0)); ssec = int(data.get("seconds", 0))
+        h, m, ssec = int(data.get("hours", 0)), int(data.get("minutes", 0)), int(data.get("seconds", 0))
         dur = h*3600 + m*60 + ssec
         if dur > 0:
             t.duration = dur
@@ -222,7 +202,7 @@ def update(tid):
 def extend(tid):
     data = request.json or {}
     extra = int(data.get("hours",0))*3600 + int(data.get("minutes",0))*60 + int(data.get("seconds",0))
-    if extra <= 0: return jsonify({"ok": False, "error": "extra must be > 0"}), 400
+    if extra <= 0: return jsonify({"ok": False}), 400
     with session_scope() as s:
         t = s.get(Task, tid)
         if not t: return jsonify({"ok": False}), 404
