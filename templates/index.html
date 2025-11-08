@@ -13,16 +13,15 @@
     input[type="text"] { width: 180px; }
     .muted { color: #777; font-size: 12px; }
     .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; transition: background-color 0.4s ease; }
-    .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
-    .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
-    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
+    .running { background:#d9ffd9; }
+    .paused  { background:#fff0b3; }
+    .pending { background:#f2f2f2; }
+    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; }
     button { cursor:pointer; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
     .edit-grid, .extend-grid, .move-grid {
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
-    tr { transition: background-color 0.4s ease; }
     .toolbar { text-align:center; margin-bottom:10px }
     .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
     .work-col { width: 42px; }
@@ -35,11 +34,7 @@
 <div class="toolbar">
   <div id="now" class="muted"></div>
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span><br>
-  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span><br><br>
-  <label>⏰ סימולציה משעה:
-    <input id="simTime" type="time" value="08:00">
-    <button id="btnSim">חשב סימולציה</button>
-  </label>
+  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span>
 </div>
 
 <div class="tools">
@@ -82,240 +77,137 @@
 <script>
 const $ = s => document.querySelector(s);
 let tasks = [];
-let syncing = false;
-let lastServerSync = 0;
-let isTyping = false;
-let frozenLayout = null;
 
-const tzFmt = new Intl.DateTimeFormat('he-IL', {
-  timeZone: 'Asia/Jerusalem',
-  hour12: false,
-  hour: '2-digit', minute: '2-digit', second: '2-digit'
-});
+const tzFmt = new Intl.DateTimeFormat('he-IL',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit',timeZone:'Asia/Jerusalem'});
 
 function fmt(t){
-  t=Math.max(0,parseInt(t));
-  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
+  t=Math.max(0,parseInt(t)); let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
   return `${h.toString().padStart(2,'0')}:${m.toString().padStart(2,'0')}:${s.toString().padStart(2,'0')}`;
 }
-function badgeClass(st){
-  if(st==='running') return 'badge running';
-  if(st==='paused')  return 'badge paused';
-  if(st==='pending') return 'badge pending';
-  return 'badge done';
-}
 
-async function api(url, method="GET", body=null){
+async function api(url,method="GET",body=null){
   try{
-    const res=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
-    return await res.json();
+    const r=await fetch(url,{method,headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):null});
+    return await r.json();
   }catch{return null;}
 }
 
-function computeOverallEndLocal(baseTime=null){
-  const base = baseTime || Date.now();
-  let total = 0;
-  for (const t of tasks){
-    if(["running","paused","pending"].includes(t.status))
-      total += t.remaining;
-  }
-  if(total===0) return "-";
-  return tzFmt.format(new Date(base + total*1000));
+function computeOverallEnd(){
+  const total=tasks.filter(t=>["running","paused","pending"].includes(t.status))
+                   .reduce((a,b)=>a+b.remaining,0);
+  if(total===0)return "-";
+  return tzFmt.format(new Date(Date.now()+total*1000));
 }
 
-function computeTimesOnce(startMs=null){
-  const now = startMs || Date.now();
-  const n = tasks.length;
-  const r = tasks.findIndex(t => t.status === 'running');
-  let layout = [];
-
-  if (r === -1) {
-    let base = now;
-    for (let i = 0; i < n; i++) {
-      const dur = Math.max(0, tasks[i].remaining) * 1000;
-      layout.push({ id: tasks[i].id, start: base, end: base + dur });
-      base += dur;
-    }
-  } else {
-    const run = tasks[r];
-    const elapsed = Math.max(0, run.duration - run.remaining);
-    const startRun = now - elapsed * 1000;
-    const endRun = startRun + run.duration * 1000;
-
-    let end = startRun;
-    for (let i = r - 1; i >= 0; i--) {
-      const dur = Math.max(0, tasks[i].remaining) * 1000;
-      layout.unshift({ id: tasks[i].id, start: end - dur, end: end });
-      end -= dur;
-    }
-
-    layout.push({ id: run.id, start: startRun, end: endRun });
-
-    let start = endRun;
-    for (let i = r + 1; i < n; i++) {
-      const dur = Math.max(0, tasks[i].remaining) * 1000;
-      layout.push({ id: tasks[i].id, start: start, end: start + dur });
-      start += dur;
-    }
-  }
-  frozenLayout = layout;
-}
-
-async function syncState(force=false){
-  const now = Date.now();
-  if(syncing) return;
-  if(!force && now - lastServerSync < 2000) return;
-  syncing = true;
-  const data = await api("/state");
-  syncing = false;
-  lastServerSync = now;
-  if(!data || !data.ok) return;
-
-  tasks = data.tasks;
-  $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
-  $("#overallEnd").textContent = computeOverallEndLocal();
-  $("#now").textContent = data.now || "";
-
-  if (!tasks.some(t => t.status === "running"))
-    frozenLayout = null;
-
-  renderTasks(true);
+async function syncState(){
+  const data=await api("/state");
+  if(!data||!data.ok)return;
+  tasks=data.tasks;
+  $("#workTotal").textContent=data.work_total_hhmmss||"00:00:00";
+  $("#overallEnd").textContent=computeOverallEnd();
+  $("#now").textContent=data.now||"";
+  renderTasks();
 }
 
 function renderTasks(){
-  if(isTyping) return;
-  const tb=$("#tbody");
-  tb.innerHTML="";
-  if (!frozenLayout) computeTimesOnce();
-
+  const tb=$("#tbody"); tb.innerHTML="";
   tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
-    tr.id="row-"+t.id;
     tr.className=t.status;
-    const canEdit=(t.status!=="running");
-    const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
-    const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
-    const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
-
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
-      <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
-      <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
-      <td>${startStr}</td>
-      <td>${endStr}</td>
-      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
-      <td>
-        <div class="edit-grid">
-          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
-          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
-          <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
-          <button ${canEdit?"":"disabled"} onclick="updateTask(${t.id})">עדכן</button>
-        </div>
-      </td>
-      <td>
-        <div class="extend-grid">
-          <input class="ext-h" type="number" min="0" value="0">:
-          <input class="ext-m" type="number" min="0" value="0">:
-          <input class="ext-s" type="number" min="0" value="0">
-          <button onclick="extendTask(${t.id})">הארך</button>
-        </div>
-      </td>
-      <td>
-        <div class="move-grid">
-          <input class="move-to" type="number" min="1" value="${i+1}">
-          <button onclick="moveTask(${t.id})">העבר</button>
-        </div>
-      </td>
+      <td><input type="checkbox" class="work" ${t.is_work?"checked":""}></td>
+      <td><input class="name" value="${t.name}" ${t.status==="running"?"disabled":""}></td>
+      <td><span class="remain">${fmt(t.remaining)}</span></td>
+      <td>-</td><td>-</td>
+      <td><span>${t.status}</span></td>
+      <td><div class="edit-grid">
+          <input class="h" type="number" value="${Math.floor(t.duration/3600)}">:
+          <input class="m" type="number" value="${Math.floor((t.duration%3600)/60)}">:
+          <input class="s" type="number" value="${t.duration%60}">
+          <button class="update">עדכן</button>
+      </div></td>
+      <td><div class="extend-grid">
+          <input class="eh" type="number" value="0">:
+          <input class="em" type="number" value="0">:
+          <input class="es" type="number" value="0">
+          <button class="extend">הארך</button>
+      </div></td>
+      <td><input class="pos" type="number" value="${i+1}" style="width:40px"><button class="move">העבר</button></td>
       <td class="row-actions">
-        <button onclick="changeStatus(${t.id},'running','/start/${t.id}')">התחל</button>
-        <button onclick="changeStatus(${t.id},'paused','/pause/${t.id}')">השהה</button>
-        <button onclick="changeStatus(${t.id},'pending','/set_pending/${t.id}')">Pending</button>
-        <button onclick="changeStatus(${t.id},'done','/done/${t.id}')">✅ Done</button>
-        <button onclick="action('/delete/${t.id}')">מחק</button>
+        <button class="start">התחל</button>
+        <button class="pause">השהה</button>
+        <button class="pending">Pending</button>
+        <button class="done">✅ Done</button>
+        <button class="skip">דלג</button>
+        <button class="del">מחק</button>
       </td>`;
     tb.appendChild(tr);
 
-    tr.querySelector(".work-flag").onchange = async e=>{
+    tr.querySelector(".work").onchange=async e=>{
       await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
-      t.is_work=e.target.checked;
-      await syncState(true);
+      t.is_work=e.target.checked; syncState();
     };
+    tr.querySelector(".update").onclick=async()=>{
+      const h=parseInt(tr.querySelector(".h").value)||0,m=parseInt(tr.querySelector(".m").value)||0,s=parseInt(tr.querySelector(".s").value)||0;
+      const nm=tr.querySelector(".name").value;
+      await api(`/update/${t.id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
+      await syncState();
+    };
+    tr.querySelector(".extend").onclick=async()=>{
+      const h=parseInt(tr.querySelector(".eh").value)||0,m=parseInt(tr.querySelector(".em").value)||0,s=parseInt(tr.querySelector(".es").value)||0;
+      await api(`/extend/${t.id}`,"POST",{hours:h,minutes:m,seconds:s});
+      await syncState();
+    };
+    tr.querySelector(".move").onclick=async()=>{
+      const newPos=parseInt(tr.querySelector(".pos").value)||1;
+      await api("/reorder_single","POST",{task_id:t.id,new_position:newPos});
+      await syncState();
+    };
+    tr.querySelector(".start").onclick=()=>changeStatus(t.id,"/start");
+    tr.querySelector(".pause").onclick=()=>changeStatus(t.id,"/pause");
+    tr.querySelector(".pending").onclick=()=>changeStatus(t.id,"/set_pending");
+    tr.querySelector(".done").onclick=()=>changeStatus(t.id,"/done");
+    tr.querySelector(".skip").onclick=()=>changeStatus(t.id,"/skip");
+    tr.querySelector(".del").onclick=()=>changeStatus(t.id,"/delete");
   });
 }
 
-async function changeStatus(id,newStatus,url){
-  const t = tasks.find(x=>x.id===id);
-  if(!t) return;
-  t.status = newStatus;
-  renderTasks();
-  await api(url,"POST");
-  await syncState(true);
-}
-
-async function action(url){
-  await api(url,"POST");
-  await syncState(true);
-}
-
-async function updateTask(id){
-  const row=$("#row-"+id);
-  const nm=row.querySelector(".edit-name").value;
-  const h=parseInt(row.querySelector(".edit-h").value)||0;
-  const m=parseInt(row.querySelector(".edit-m").value)||0;
-  const s=parseInt(row.querySelector(".edit-s").value)||0;
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-async function extendTask(id){
-  const row=$("#row-"+id);
-  const h=parseInt(row.querySelector(".ext-h").value)||0;
-  const m=parseInt(row.querySelector(".ext-m").value)||0;
-  const s=parseInt(row.querySelector(".ext-s").value)||0;
-  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-async function moveTask(id){
-  const row=$("#row-"+id);
-  const newPos=parseInt(row.querySelector(".move-to").value)||1;
-  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  await syncState(true);
+async function changeStatus(id,url){
+  await api(`${url}/${id}`,"POST");
+  await syncState();
 }
 
 $("#btnAdd").onclick=async()=>{
-  const n=$("#newName").value.trim()||"משימה חדשה";
-  const h=parseInt($("#newH").value)||0, m=parseInt($("#newM").value)||0, s=parseInt($("#newS").value)||0;
+  const n=$("#newName").value||"משימה חדשה";
+  const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
   $("#newName").value=""; $("#newH").value=0; $("#newM").value=0; $("#newS").value=0;
-  await syncState(true);
+  await syncState();
 };
 
-$("#btnSim").onclick=()=>{
-  const t=$("#simTime").value;
-  if(!t) return;
-  const [h,m]=t.split(":").map(Number);
-  const base=Date.now()-(new Date().getHours()*3600+new Date().getMinutes()*60)*1000 + (h*3600+m*60)*1000;
-  computeTimesOnce(base);
-  renderTasks();
-  $("#overallEnd").textContent = computeOverallEndLocal(base);
+$("#btnExport").onclick=async()=>{
+  const r=await fetch("/export"); const b=await r.blob();
+  const u=URL.createObjectURL(b); const a=document.createElement("a");
+  a.href=u; a.download="tasks_export.json"; a.click(); a.remove(); URL.revokeObjectURL(u);
+};
+$("#fileImport").onchange=async e=>{
+  const f=e.target.files[0]; if(!f)return; const txt=await f.text();
+  try{await api("/import","POST",JSON.parse(txt)); await syncState();}
+  catch{alert("קובץ לא תקין");}
 };
 
 setInterval(()=>{
-  const running = tasks.find(t=>t.status==="running");
-  if(running){
-    running.remaining = Math.max(0, running.remaining - 1);
-    if(running.remaining === 0) running.status="done";
-  }
-  document.querySelectorAll(".remain").forEach(span=>{
-    const t=tasks.find(x=>x.id==span.dataset.id);
-    if(t) span.textContent=fmt(t.remaining);
+  const run=tasks.find(t=>t.status==="running");
+  if(run)run.remaining=Math.max(0,run.remaining-1);
+  document.querySelectorAll(".remain").forEach((el,i)=>{
+    const t=tasks[i]; el.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent=computeOverallEndLocal();
+  $("#overallEnd").textContent=computeOverallEnd();
 },1000);
 
-setInterval(()=>syncState(false),2500);
-syncState(true);
+syncState();
 </script>
 </body>
 </html>
