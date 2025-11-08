@@ -26,6 +26,8 @@
     .toolbar { text-align:center; margin-bottom:10px }
     .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
     .work-col { width: 42px; }
+    .sim-bar { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center; margin: 6px 0 12px; }
+    .sim-pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#e6f2ff; color:#0366d6; font-size:12px; }
   </style>
 </head>
 <body>
@@ -38,7 +40,17 @@
   <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span>
 </div>
 
+<!-- סימולציה -->
+<div class="sim-bar">
+  <span class="sim-pill" id="simIndicator" style="display:none;">מצב סימולציה</span>
+  התחל סימולציה בשעה:
+  <input type="time" id="simTime" value="08:00" step="60">
+  <button id="btnSim">🧮 חשב סימולציה</button>
+  <button id="btnSimClear">בטל סימולציה</button>
+</div>
+
 <div class="tools">
+  <!-- הוספת משימה -->
   <span>
     <input id="newName" type="text" placeholder="שם משימה">
     <input id="newH" type="number" min="0" value="0"> שעות
@@ -46,6 +58,8 @@
     <input id="newS" type="number" min="0" value="0"> שניות
     <button id="btnAdd">➕ הוסף</button>
   </span>
+
+  <!-- ייצוא/ייבוא -->
   <span>
     <button id="btnExport">📤 ייצא</button>
     <label style="cursor:pointer">
@@ -79,10 +93,13 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
-let frozenLayout = null;
-let editTimeout = null;
-let autoSaveTimers = {};
 let isTyping = false;
+
+// פריסות זמן
+let frozenLayout = null;         // לוגיקה הקיימת: “קופא” כשיש רצה פעילה למניעת קפיצות
+let simulationActive = false;    // דגל סימולציה
+let simulationLayout = null;     // התוצאה מהשרת בסימולציה (start/end לכל משימה)
+let simulationOverall = "-";     // סוף כולל בסימולציה
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -109,30 +126,18 @@ async function api(url, method="GET", body=null){
   }catch{return null;}
 }
 
-// 🕒 נעילת עריכה 10 שניות
-function startEditLock(){
-  isTyping = true;
-  clearTimeout(editTimeout);
-  editTimeout = setTimeout(()=>{isTyping=false;},10000);
-}
-function autoSaveTask(id){
-  clearTimeout(autoSaveTimers[id]);
-  autoSaveTimers[id] = setTimeout(()=>updateTask(id,true),1000);
-}
-
-// ✅ חישוב שעת סיום כוללת כולל משימה פעילה
 function computeOverallEndLocal(){
   const nowMs = Date.now();
-  let base = nowMs;
-  const ordered = [...tasks].sort((a,b)=>a.position-b.position);
-  for(const t of ordered){
-    if(["running","paused","pending"].includes(t.status)){
-      base += (t.remaining||0)*1000;
-    }
+  let total = 0;
+  for (const t of tasks){
+    if(["running","paused","pending"].includes(t.status))
+      total += t.remaining;
   }
-  return tzFmt.format(new Date(base));
+  if(total===0) return "-";
+  return tzFmt.format(new Date(nowMs + total*1000));
 }
 
+/* מחשב פעם אחת בלבד זמני התחלה/סיום במצב “קפוא” */
 function computeTimesOnce(){
   const now = Date.now();
   const n = tasks.length;
@@ -151,13 +156,19 @@ function computeTimesOnce(){
     const elapsed = Math.max(0, run.duration - run.remaining);
     const startRun = now - elapsed * 1000;
     const endRun = startRun + run.duration * 1000;
+
+    // לפני המשימה הפעילה
     let end = startRun;
     for (let i = r - 1; i >= 0; i--) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
       layout.unshift({ id: tasks[i].id, start: end - dur, end: end });
       end -= dur;
     }
+
+    // המשימה הפעילה
     layout.push({ id: run.id, start: startRun, end: endRun });
+
+    // אחרי המשימה הפעילה
     let start = endRun;
     for (let i = r + 1; i < n; i++) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
@@ -169,7 +180,6 @@ function computeTimesOnce(){
 }
 
 async function syncState(force=false){
-  if(isTyping) return; 
   const now = Date.now();
   if(syncing) return;
   if(!force && now - lastServerSync < 2000) return;
@@ -180,40 +190,66 @@ async function syncState(force=false){
   if(!data || !data.ok) return;
 
   tasks = data.tasks;
+
+  // עדכוני טופ-בר
   $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
-  $("#overallEnd").textContent = computeOverallEndLocal(); // תמיד מוצג
+  if (!simulationActive) {
+    $("#overallEnd").textContent = data.overall_end_time || "-";
+  }
   $("#now").textContent = data.now || "";
+
+  // אין רצה? אין צורך להקפיא
   if (!tasks.some(t => t.status === "running"))
     frozenLayout = null;
+
   renderTasks(true);
 }
 
-function renderTasks(fromSync=false){
+function activeLayoutFor(id){
+  // אם יש סימולציה – היא מנצחת בתצוגה
+  if (simulationActive && simulationLayout){
+    const hit = simulationLayout.find(x => x.id === id);
+    if (hit) return {startStr: hit.start, endStr: hit.end};
+  }
+  // אחרת – לוגיקת הקפאה הקיימת
+  if (!frozenLayout) computeTimesOnce();
+  const fl = frozenLayout ? frozenLayout.find(x => x.id === id) : null;
+  if (!fl) return {startStr:"-", endStr:"-"};
+  return {
+    startStr: tzFmt.format(new Date(fl.start)),
+    endStr: tzFmt.format(new Date(fl.end))
+  };
+}
+
+function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
-  if (!frozenLayout) computeTimesOnce();
+
   tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-    const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
-    const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
-    const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
+
+    const times = activeLayoutFor(t.id);
+
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
+      <td class="work-col">
+        <input type="checkbox" class="work-flag" ${t.is_work ? "checked": ""} title="סמן כעבודה">
+      </td>
       <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
-      <td>${startStr}</td>
-      <td>${endStr}</td>
+      <td>${times.startStr}</td>
+      <td>${times.endStr}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
           <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}" ${canEdit?"":"disabled"}>:
           <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}" ${canEdit?"":"disabled"}>:
           <input class="edit-s" type="number" min="0" value="${t.duration%60}" ${canEdit?"":"disabled"}>
+          <button ${canEdit?"":"disabled"} onclick="updateTask(${t.id})">עדכן</button>
         </div>
       </td>
       <td>
@@ -238,114 +274,198 @@ function renderTasks(fromSync=false){
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
+
     tb.appendChild(tr);
 
-    tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focus", startEditLock);
-      inp.addEventListener("input", e=>{
-        startEditLock();
-        const id = t.id;
-        if(["edit-name","edit-h","edit-m","edit-s"].some(c=>e.target.classList.contains(c)))
-          autoSaveTask(id);
-      });
-    });
-
-    tr.querySelector(".work-flag").addEventListener("change", async e=>{
-      t.is_work=e.target.checked;
-      renderTasks();
-      await api(`/workflag/${t.id}`, "POST", {is_work:e.target.checked});
+    // Work checkbox
+    const chk = tr.querySelector(".work-flag");
+    chk.addEventListener("change", async (e)=>{
+      await api(`/workflag/${t.id}`, "POST", {is_work: e.target.checked});
+      t.is_work = e.target.checked;
       await syncState(true);
     });
+
+    // שמירה שלא ייסגר המקלדת בגלל רינדור
+    tr.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focusin", ()=>isTyping=true);
+      inp.addEventListener("focusout", ()=>isTyping=false);
+      inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
+    });
   });
+
+  // עדכון אינדיקטור סימולציה ושעת סיום כוללת במצב סימולציה
+  const ind = $("#simIndicator");
+  if (simulationActive) {
+    ind.style.display = "inline-block";
+    $("#overallEnd").textContent = simulationOverall || "-";
+  } else {
+    ind.style.display = "none";
+  }
 }
 
-async function updateTask(id, silent=false){
-  const row=$("#row-"+id);
-  const nm=row.querySelector(".edit-name").value;
-  const h=parseInt(row.querySelector(".edit-h").value)||0;
-  const m=parseInt(row.querySelector(".edit-m").value)||0;
-  const s=parseInt(row.querySelector(".edit-s").value)||0;
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  if(!silent) await syncState(true);
-}
-
-async function extendTask(id){
-  const row=$("#row-"+id);
-  const h=parseInt(row.querySelector(".ext-h").value)||0;
-  const m=parseInt(row.querySelector(".ext-m").value)||0;
-  const s=parseInt(row.querySelector(".ext-s").value)||0;
-  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-
-async function moveTask(id){
-  const row=$("#row-"+id);
-  const newPos=parseInt(row.querySelector(".move-to").value)||1;
-  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  await syncState(true);
+// עדכון סטטוס מיידי בשורה
+function updateRowStatus(id, status) {
+  const row = document.getElementById(`row-${id}`);
+  if (!row) return;
+  row.className = status;
+  const badge = row.querySelector("td:nth-child(7) span");
+  if (badge) {
+    badge.className = badgeClass(status);
+    badge.textContent = status;
+  }
 }
 
 async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
-    if(url.includes("/start/"))  t.status="running";
-    if(url.includes("/pause/"))  t.status="paused";
-    if(url.includes("/reset/"))  t.status="running", t.remaining=t.duration;
-    if(url.includes("/set_pending/")) t.status="pending";
-    if(url.includes("/skip/"))   t.status="done";
-    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
+    // שינוי מיידי בדפדפן + ביטול סימולציה כי המציאות השתנתה
+    simulationActive = false;
+    simulationLayout = null;
+    simulationOverall = "-";
+
+    if(url.includes("/start/"))  { t.status="running"; frozenLayout = null; }
+    if(url.includes("/pause/"))  { t.status="paused"; frozenLayout = null; }
+    if(url.includes("/reset/"))  { t.status="running"; t.remaining=t.duration; frozenLayout = null; }
+    if(url.includes("/set_pending/")) { t.status="pending"; frozenLayout = null; }
+    if(url.includes("/skip/"))   { t.status="done"; frozenLayout = null; }
+    if(url.includes("/delete/")) { tasks=tasks.filter(x=>x.id!==id); frozenLayout = null; }
+
+    updateRowStatus(id, t.status);
     renderTasks();
   }
   await api(url,"POST");
   await syncState(true);
 }
 
+async function updateTask(id){
+  const row=$("#row-"+id);
+  const nm=row.querySelector(".edit-name").value;
+  const h=parseInt(row.querySelector(".edit-h").value)||0;
+  const m=parseInt(row.querySelector(".edit-m").value)||0;
+  const s=parseInt(row.querySelector(".edit-s").value)||0;
+  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
+  // כל שינוי אמיתי מבטל סימולציה
+  simulationActive = false;
+  simulationLayout = null;
+  simulationOverall = "-";
+  await syncState(true);
+}
+async function extendTask(id){
+  const row=$("#row-"+id);
+  const h=parseInt(row.querySelector(".ext-h").value)||0;
+  const m=parseInt(row.querySelector(".ext-m").value)||0;
+  const s=parseInt(row.querySelector(".ext-s").value)||0;
+  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
+  simulationActive = false;
+  simulationLayout = null;
+  simulationOverall = "-";
+  await syncState(true);
+}
+async function moveTask(id){
+  const row=$("#row-"+id);
+  const newPos=parseInt(row.querySelector(".move-to").value)||1;
+  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
+  simulationActive = false;
+  simulationLayout = null;
+  simulationOverall = "-";
+  await syncState(true);
+}
+
+// הוספת משימה
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
-  const h=parseInt($("#newH").value)||0,m=parseInt($("#newM").value)||0,s=parseInt($("#newS").value)||0;
+  const h=parseInt($("#newH").value)||0, m=parseInt($("#newM").value)||0, s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
-  $("#newName").value="";$("#newH").value=0;$("#newM").value=0;$("#newS").value=0;
+  $("#newName").value=""; $("#newH").value=0; $("#newM").value=0; $("#newS").value=0;
+  simulationActive = false;
+  simulationLayout = null;
+  simulationOverall = "-";
   await syncState(true);
 };
 
-$("#btnExport").onclick=async()=>{
-  const res=await fetch("/export");
-  const blob=await res.blob();
-  const url=URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;a.download="tasks_export.json";
-  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+// ייצוא
+$("#btnExport").onclick = async ()=>{
+  const res = await fetch("/export");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "tasks_export.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 };
 
-$("#fileImport").addEventListener("change",async(ev)=>{
-  const file=ev.target.files[0];
-  if(!file)return;
-  const txt=await file.text();
+// ייבוא
+$("#fileImport").addEventListener("change", async (ev)=>{
+  const file = ev.target.files[0];
+  if(!file) return;
+  const txt = await file.text();
   try{
-    const json=JSON.parse(txt);
-    await api("/import","POST",json);
+    const json = JSON.parse(txt);
+    await api("/import", "POST", json);
+    simulationActive = false;
+    simulationLayout = null;
+    simulationOverall = "-";
     await syncState(true);
-  }catch(e){alert("קובץ ייבוא לא תקין.");}
-  ev.target.value="";
+  }catch(e){
+    alert("קובץ ייבוא לא תקין.");
+  }finally{
+    ev.target.value = "";
+  }
 });
 
+/* ✅ לולאת עדכון חלקה למסך */
 setInterval(()=>{
-  const running=tasks.find(t=>t.status==="running");
+  // מעדכן נותר רק במשימה שרצה – ללא ריענון מלא
+  const running = tasks.find(t=>t.status==="running");
   if(running){
-    running.remaining=Math.max(0,running.remaining-1);
-    if(running.remaining===0)running.status="done";
+    running.remaining = Math.max(0, running.remaining - 1);
+    if(running.remaining === 0) {
+      running.status = "done";
+      frozenLayout = null;
+      simulationActive = false;
+      simulationLayout = null;
+      simulationOverall = "-";
+    }
   }
+  // עדכון “נותר”
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
-    if(t)span.textContent=fmt(t.remaining);
+    if(t) span.textContent=fmt(t.remaining);
   });
-  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent=computeOverallEndLocal(); // ✅ תמיד מוצג
-},1000);
 
-setInterval(()=>syncState(false),2500);
+  // שעון מערכת
+  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
+
+  // אם אין רצה ולא בסימולציה – נחשב סוף כולל מקומי
+  if(!tasks.some(t=>t.status==="running") && !simulationActive){
+    $("#overallEnd").textContent = computeOverallEndLocal();
+  }
+}, 1000);
+
+// סינכרון מהשרת
+setInterval(()=>syncState(false), 2500);
 syncState(true);
+
+// ====== כפתורי סימולציה ======
+$("#btnSim").onclick = async ()=>{
+  const t = $("#simTime").value || "08:00";
+  const res = await api("/simulate", "POST", {start_time: t});
+  if (!res || !res.ok) return;
+  simulationActive = true;
+  simulationLayout = res.layout || [];
+  simulationOverall = res.overall_end || "-";
+  renderTasks();
+};
+$("#btnSimClear").onclick = ()=>{
+  simulationActive = false;
+  simulationLayout = null;
+  simulationOverall = "-";
+  renderTasks();
+};
 </script>
 </body>
 </html>
