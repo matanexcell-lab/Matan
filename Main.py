@@ -20,7 +20,6 @@ engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False))
 Base = declarative_base()
 
-
 @contextmanager
 def session_scope():
     s = Session()
@@ -33,10 +32,8 @@ def session_scope():
     finally:
         s.close()
 
-
 def now():
     return datetime.now(TZ)
-
 
 def hhmmss(sec):
     sec = max(0, int(sec or 0))
@@ -44,7 +41,6 @@ def hhmmss(sec):
     m = (sec % 3600) // 60
     s = sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
-
 
 # ====================================================
 # מודל המשימה
@@ -79,10 +75,8 @@ class Task(Base):
             is_work=self.is_work,
         )
 
-
 Base.metadata.create_all(engine)
 app = Flask(__name__)
-
 
 # ====================================================
 # פונקציות עזר
@@ -101,7 +95,7 @@ def recompute_chain():
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
-                    # הפעל משימה הבאה
+                    # הפעל משימה הבאה אם קיימת
                     if i + 1 < len(tasks):
                         nxt = tasks[i + 1]
                         if nxt.status == "pending":
@@ -112,12 +106,10 @@ def recompute_chain():
                     t.remaining = rem
                     s.add(t)
 
-
 def work_total_seconds():
     with session_scope() as s:
         items = s.query(Task).filter(Task.is_work == True).all()
         return sum(int(x.duration or 0) for x in items)
-
 
 # ====================================================
 # ROUTES
@@ -125,7 +117,6 @@ def work_total_seconds():
 @app.route("/")
 def index():
     return render_template("index.html")
-
 
 @app.route("/state")
 def state():
@@ -138,9 +129,8 @@ def state():
         tasks=payload,
         work_total_seconds=work_total_seconds(),
         work_total_hhmmss=hhmmss(work_total_seconds()),
-        now=now().strftime("%H:%M:%S %d.%m.%Y"),
+        now=now().strftime("%H:%M:%S %d.%m.%Y")
     )
-
 
 @app.route("/add", methods=["POST"])
 def add():
@@ -153,17 +143,49 @@ def add():
         sss.add(Task(name=n, duration=dur, remaining=dur, status="pending", position=pos))
     return jsonify(ok=True)
 
+@app.route("/update/<int:tid>", methods=["POST"])
+def update_task(tid):
+    d = request.json or {}
+    n = d.get("name", "").strip()
+    h, m, ssec = map(int, [d.get("hours", 0), d.get("minutes", 0), d.get("seconds", 0)])
+    dur = h * 3600 + m * 60 + ssec
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            t.name = n or t.name
+            t.duration = dur
+            t.remaining = dur
+            s.add(t)
+    return jsonify(ok=True)
+
+@app.route("/extend/<int:tid>", methods=["POST"])
+def extend_task(tid):
+    d = request.json or {}
+    add_sec = d.get("hours", 0)*3600 + d.get("minutes", 0)*60 + d.get("seconds", 0)
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            t.duration += add_sec
+            t.remaining += add_sec
+            if t.status == "running" and t.end_time:
+                t.end_time += timedelta(seconds=add_sec)
+            s.add(t)
+    return jsonify(ok=True)
 
 @app.route("/start/<int:tid>", methods=["POST"])
 def start(tid):
     with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc()).all()
+        for t in tasks:
+            if t.status == "running" and t.id != tid:
+                t.status = "paused"
+                s.add(t)
         t = s.get(Task, tid)
         if t:
             t.status = "running"
             t.end_time = now() + timedelta(seconds=t.remaining)
             s.add(t)
     return jsonify(ok=True)
-
 
 @app.route("/pause/<int:tid>", methods=["POST"])
 def pause(tid):
@@ -176,7 +198,6 @@ def pause(tid):
             t.status = "paused"
             s.add(t)
     return jsonify(ok=True)
-
 
 @app.route("/done/<int:tid>", methods=["POST"])
 def done(tid):
@@ -198,7 +219,6 @@ def done(tid):
                 break
     return jsonify(ok=True)
 
-
 @app.route("/set_pending/<int:tid>", methods=["POST"])
 def set_pending(tid):
     with session_scope() as s:
@@ -209,7 +229,6 @@ def set_pending(tid):
             s.add(t)
     return jsonify(ok=True)
 
-
 @app.route("/delete/<int:tid>", methods=["POST"])
 def delete(tid):
     with session_scope() as s:
@@ -217,7 +236,6 @@ def delete(tid):
         if t:
             s.delete(t)
     return jsonify(ok=True)
-
 
 @app.route("/workflag/<int:tid>", methods=["POST"])
 def workflag(tid):
@@ -229,7 +247,6 @@ def workflag(tid):
             s.add(t)
     return jsonify(ok=True)
 
-
 @app.route("/export")
 def export():
     with session_scope() as s:
@@ -240,7 +257,6 @@ def export():
     r.headers["Content-Type"] = "application/json; charset=utf-8"
     r.headers["Content-Disposition"] = "attachment; filename=tasks_export.json"
     return r
-
 
 @app.route("/import", methods=["POST"])
 def import_tasks():
@@ -260,7 +276,6 @@ def import_tasks():
                 )
             )
     return jsonify({"ok": True})
-
 
 # ====================================================
 # הרצת שרת Flask
