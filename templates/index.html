@@ -83,7 +83,7 @@ let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
 let isTyping = false;
-let frozenLayout = null;
+let frozenLayout = null; // לא זז כשיש רצה פעילה
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -184,6 +184,7 @@ function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
+
   if (!frozenLayout) computeTimesOnce();
 
   tasks.forEach((t,i)=>{
@@ -191,13 +192,16 @@ function renderTasks(){
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
+
     const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
     const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
     const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
 
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
+      <td class="work-col">
+        <input type="checkbox" class="work-flag" ${t.is_work ? "checked": ""} title="סמן כעבודה">
+      </td>
       <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
       <td>${startStr}</td>
@@ -230,21 +234,22 @@ function renderTasks(){
         <button onclick="action('/pause/${t.id}')">השהה</button>
         <button onclick="action('/reset/${t.id}')">איפוס</button>
         <button onclick="action('/set_pending/${t.id}')">Pending</button>
-        <button onclick="action('/skip/${t.id}')">דלג</button>
-        <button onclick="action('/done/${t.id}')">✅ Done</button>
+        <button onclick="action('/done/${t.id}')">Done</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
 
-    tr.querySelector(".work-flag").onchange = async e=>{
-      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
-      t.is_work=e.target.checked;
+    const chk = tr.querySelector(".work-flag");
+    chk.addEventListener("change", async (e)=>{
+      await api(`/workflag/${t.id}`, "POST", {is_work: e.target.checked});
+      t.is_work = e.target.checked;
       await syncState(true);
-    };
+    });
 
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focusin", ()=>isTyping=true);
       inp.addEventListener("focusout", ()=>isTyping=false);
+      inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
     });
   });
 }
@@ -255,7 +260,7 @@ async function action(url){
   if(t){
     if(url.includes("/start/"))  t.status="running";
     if(url.includes("/pause/"))  t.status="paused";
-    if(url.includes("/reset/"))  t.status="running";
+    if(url.includes("/reset/"))  { t.status="running"; t.remaining=t.duration; }
     if(url.includes("/set_pending/")) t.status="pending";
     if(url.includes("/skip/"))   t.status="done";
     if(url.includes("/done/"))   {t.status="done"; t.remaining=0;}
@@ -264,6 +269,7 @@ async function action(url){
     renderTasks(true);
   }
   await api(url,"POST");
+  await new Promise(r=>setTimeout(r,500)); // ההשהייה שמונעת קפיצות
   await syncState(true);
 }
 
@@ -331,14 +337,19 @@ setInterval(()=>{
   const running = tasks.find(t=>t.status==="running");
   if(running){
     running.remaining = Math.max(0, running.remaining - 1);
-    if(running.remaining === 0) running.status="done";
+    if(running.remaining === 0) {
+      running.status = "done";
+      frozenLayout = null;
+    }
   }
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent=computeOverallEndLocal();
+  if(!tasks.some(t=>t.status==="running")){
+    $("#overallEnd").textContent = computeOverallEndLocal();
+  }
 },1000);
 
 setInterval(()=>syncState(false),2500);
