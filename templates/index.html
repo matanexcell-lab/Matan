@@ -39,7 +39,6 @@
 </div>
 
 <div class="tools">
-  <!-- הוספת משימה -->
   <span>
     <input id="newName" type="text" placeholder="שם משימה">
     <input id="newH" type="number" min="0" value="0"> שעות
@@ -48,7 +47,6 @@
     <button id="btnAdd">➕ הוסף</button>
   </span>
 
-  <!-- ייצוא/ייבוא -->
   <span>
     <button id="btnExport">📤 ייצא</button>
     <label style="cursor:pointer">
@@ -248,7 +246,7 @@ function renderTasks(){
 
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focusin", ()=>isTyping=true);
-      inp.addEventListener("focusout", ()=>{ setTimeout(()=>{isTyping=false},10000); }); // ✅ לא סוגר מיד
+      inp.addEventListener("focusout", ()=>{ setTimeout(()=>{isTyping=false},10000); });
       inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
     });
   });
@@ -256,19 +254,7 @@ function renderTasks(){
 
 async function action(url){
   const id=parseInt(url.split("/").pop());
-  const t=tasks.find(x=>x.id===id);
-  if(t){
-    if(url.includes("/start/"))  t.status="running";
-    if(url.includes("/pause/"))  t.status="paused";
-    if(url.includes("/reset/"))  { t.status="running"; t.remaining=t.duration; }
-    if(url.includes("/set_pending/")) t.status="pending";
-    if(url.includes("/done/"))   {t.status="done"; t.remaining=0;}
-    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
-    frozenLayout=null;
-    renderTasks(true);
-  }
   await api(url,"POST");
-  await new Promise(r=>setTimeout(r,500)); // ✅ השהייה קלה
   await syncState(true);
 }
 
@@ -336,10 +322,7 @@ setInterval(()=>{
   const running = tasks.find(t=>t.status==="running");
   if(running){
     running.remaining = Math.max(0, running.remaining - 1);
-    if(running.remaining === 0) {
-      running.status = "done";
-      frozenLayout = null;
-    }
+    if(running.remaining === 0) running.status = "done";
   }
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
