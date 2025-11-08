@@ -182,7 +182,6 @@ function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
-
   if (!frozenLayout) computeTimesOnce();
 
   tasks.forEach((t,i)=>{
@@ -190,16 +189,13 @@ function renderTasks(){
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-
     const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
     const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
     const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
 
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col">
-        <input type="checkbox" class="work-flag" ${t.is_work ? "checked": ""} title="סמן כעבודה">
-      </td>
+      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
       <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
       <td>${startStr}</td>
@@ -228,32 +224,31 @@ function renderTasks(){
         </div>
       </td>
       <td class="row-actions">
-        <button onclick="action('/start/${t.id}')">התחל</button>
-        <button onclick="action('/pause/${t.id}')">השהה</button>
-        <button onclick="action('/reset/${t.id}')">איפוס</button>
-        <button onclick="action('/set_pending/${t.id}')">Pending</button>
-        <button onclick="action('/done/${t.id}')">Done</button>
+        <button onclick="action('/start/${t.id}','running')">התחל</button>
+        <button onclick="action('/pause/${t.id}','paused')">השהה</button>
+        <button onclick="action('/reset/${t.id}','running')">איפוס</button>
+        <button onclick="action('/set_pending/${t.id}','pending')">Pending</button>
+        <button onclick="action('/skip/${t.id}','done')">דלג</button>
+        <button onclick="action('/done/${t.id}','done')">✅ Done</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
     tb.appendChild(tr);
 
-    const chk = tr.querySelector(".work-flag");
-    chk.addEventListener("change", async (e)=>{
-      await api(`/workflag/${t.id}`, "POST", {is_work: e.target.checked});
-      t.is_work = e.target.checked;
+    tr.querySelector(".work-flag").onchange = async e=>{
+      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
+      t.is_work=e.target.checked;
       await syncState(true);
-    });
-
-    tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focusin", ()=>isTyping=true);
-      inp.addEventListener("focusout", ()=>{ setTimeout(()=>{isTyping=false},10000); });
-      inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
-    });
+    };
   });
 }
 
-async function action(url){
+async function action(url, statusOverride=null){
   const id=parseInt(url.split("/").pop());
+  const t=tasks.find(x=>x.id===id);
+  if(t && statusOverride){
+    t.status=statusOverride;
+    renderTasks();
+  }
   await api(url,"POST");
   await syncState(true);
 }
@@ -290,48 +285,18 @@ $("#btnAdd").onclick=async()=>{
   await syncState(true);
 };
 
-$("#btnExport").onclick = async ()=>{
-  const res = await fetch("/export");
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "tasks_export.json";
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-};
-
-$("#fileImport").addEventListener("change", async (ev)=>{
-  const file = ev.target.files[0];
-  if(!file) return;
-  const txt = await file.text();
-  try{
-    const json = JSON.parse(txt);
-    await api("/import", "POST", json);
-    await syncState(true);
-  }catch(e){
-    alert("קובץ ייבוא לא תקין.");
-  }finally{
-    ev.target.value = "";
-  }
-});
-
 setInterval(()=>{
   const running = tasks.find(t=>t.status==="running");
   if(running){
     running.remaining = Math.max(0, running.remaining - 1);
-    if(running.remaining === 0) running.status = "done";
+    if(running.remaining === 0) running.status="done";
   }
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  if(!tasks.some(t=>t.status==="running")){
-    $("#overallEnd").textContent = computeOverallEndLocal();
-  }
+  $("#overallEnd").textContent=computeOverallEndLocal();
 },1000);
 
 setInterval(()=>syncState(false),2500);
