@@ -3,22 +3,16 @@ import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 import pytz
-
 from flask import Flask, jsonify, render_template, request, make_response
-from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine, text
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
-# ====================================================
-# הגדרות בסיסיות
-# ====================================================
 TZ = pytz.timezone("Asia/Jerusalem")
 
-# ✅ עדכן כאן את מסד הנתונים שלך
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://matan_nb_user:Qzcukb3uonnqU3wgDxKyzkxeEaT83PJp@dpg-d40u1m7gi27c73d0oorg-a:5432/matan_nb"
 )
-
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
 Base = declarative_base()
@@ -45,12 +39,8 @@ def hhmmss(total_seconds):
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
 
-# ====================================================
-# מודל המשימה
-# ====================================================
 class Task(Base):
     __tablename__ = "tasks"
-
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
     duration = Column(Integer, nullable=False)
@@ -81,15 +71,8 @@ class Task(Base):
         }
 
 Base.metadata.create_all(engine)
-
-# ====================================================
-# Flask App
-# ====================================================
 app = Flask(__name__)
 
-# ====================================================
-# פונקציות עזר
-# ====================================================
 def recompute_chain():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -104,7 +87,6 @@ def recompute_chain():
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
-                    # הפעל משימה הבאה
                     if i + 1 < len(tasks):
                         nxt = tasks[i + 1]
                         if nxt.status == "pending":
@@ -120,9 +102,6 @@ def work_total_seconds():
         items = s.query(Task).filter(Task.is_work == True).all()
         return sum(int(x.duration or 0) for x in items)
 
-# ====================================================
-# ROUTES
-# ====================================================
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -154,6 +133,7 @@ def add():
         s.add(Task(name=name, duration=dur, remaining=dur, status="pending", position=pos))
     return jsonify({"ok": True})
 
+# ✅ כל אחת מהפונקציות האלה מעדכנת את הסטטוס גם ב-DB, כך שהוא נשמר גם אחרי רענון
 @app.route("/start/<int:tid>", methods=["POST"])
 def start(tid):
     with session_scope() as s:
@@ -180,7 +160,6 @@ def pause(tid):
 
 @app.route("/done/<int:tid>", methods=["POST"])
 def mark_done(tid):
-    """✅ מסמן משימה כ-Done ומפעיל את המשימה הבאה אם יש Pending"""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         now_ts = now()
@@ -197,6 +176,17 @@ def mark_done(tid):
                         nxt.end_time = now_ts + timedelta(seconds=nxt.remaining)
                         s.add(nxt)
                 break
+    return jsonify({"ok": True})
+
+@app.route("/set_pending/<int:tid>", methods=["POST"])
+def set_pending(tid):
+    """✅ משנה סטטוס ל-Pending ושומר ב-DB"""
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            t.status = "pending"
+            t.end_time = None
+            s.add(t)
     return jsonify({"ok": True})
 
 @app.route("/workflag/<int:tid>", methods=["POST"])
