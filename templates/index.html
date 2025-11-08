@@ -26,8 +26,6 @@
     .toolbar { text-align:center; margin-bottom:10px }
     .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
     .work-col { width: 42px; }
-    .sim-bar { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; align-items:center; margin: 6px 0 12px; }
-    .sim-pill { display:inline-block; padding:2px 8px; border-radius:999px; background:#e6f2ff; color:#0366d6; font-size:12px; }
   </style>
 </head>
 <body>
@@ -38,15 +36,6 @@
   <div id="now" class="muted"></div>
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span><br>
   <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span>
-</div>
-
-<!-- סימולציה -->
-<div class="sim-bar">
-  <span class="sim-pill" id="simIndicator" style="display:none;">מצב סימולציה</span>
-  התחל סימולציה בשעה:
-  <input type="time" id="simTime" value="08:00" step="60">
-  <button id="btnSim">🧮 חשב סימולציה</button>
-  <button id="btnSimClear">בטל סימולציה</button>
 </div>
 
 <div class="tools">
@@ -94,12 +83,7 @@ let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
 let isTyping = false;
-
-// פריסות זמן
-let frozenLayout = null;         // לוגיקה הקיימת: “קופא” כשיש רצה פעילה למניעת קפיצות
-let simulationActive = false;    // דגל סימולציה
-let simulationLayout = null;     // התוצאה מהשרת בסימולציה (start/end לכל משימה)
-let simulationOverall = "-";     // סוף כולל בסימולציה
+let frozenLayout = null;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -137,7 +121,6 @@ function computeOverallEndLocal(){
   return tzFmt.format(new Date(nowMs + total*1000));
 }
 
-/* מחשב פעם אחת בלבד זמני התחלה/סיום במצב “קפוא” */
 function computeTimesOnce(){
   const now = Date.now();
   const n = tasks.length;
@@ -157,7 +140,6 @@ function computeTimesOnce(){
     const startRun = now - elapsed * 1000;
     const endRun = startRun + run.duration * 1000;
 
-    // לפני המשימה הפעילה
     let end = startRun;
     for (let i = r - 1; i >= 0; i--) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
@@ -165,10 +147,8 @@ function computeTimesOnce(){
       end -= dur;
     }
 
-    // המשימה הפעילה
     layout.push({ id: run.id, start: startRun, end: endRun });
 
-    // אחרי המשימה הפעילה
     let start = endRun;
     for (let i = r + 1; i < n; i++) {
       const dur = Math.max(0, tasks[i].remaining) * 1000;
@@ -190,59 +170,38 @@ async function syncState(force=false){
   if(!data || !data.ok) return;
 
   tasks = data.tasks;
-
-  // עדכוני טופ-בר
   $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
-  if (!simulationActive) {
-    $("#overallEnd").textContent = data.overall_end_time || "-";
-  }
+  $("#overallEnd").textContent = computeOverallEndLocal();
   $("#now").textContent = data.now || "";
 
-  // אין רצה? אין צורך להקפיא
   if (!tasks.some(t => t.status === "running"))
     frozenLayout = null;
 
   renderTasks(true);
 }
 
-function activeLayoutFor(id){
-  // אם יש סימולציה – היא מנצחת בתצוגה
-  if (simulationActive && simulationLayout){
-    const hit = simulationLayout.find(x => x.id === id);
-    if (hit) return {startStr: hit.start, endStr: hit.end};
-  }
-  // אחרת – לוגיקת הקפאה הקיימת
-  if (!frozenLayout) computeTimesOnce();
-  const fl = frozenLayout ? frozenLayout.find(x => x.id === id) : null;
-  if (!fl) return {startStr:"-", endStr:"-"};
-  return {
-    startStr: tzFmt.format(new Date(fl.start)),
-    endStr: tzFmt.format(new Date(fl.end))
-  };
-}
-
 function renderTasks(){
   if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
+  if (!frozenLayout) computeTimesOnce();
 
   tasks.forEach((t,i)=>{
     const tr=document.createElement("tr");
     tr.id="row-"+t.id;
     tr.className=t.status;
     const canEdit=(t.status!=="running");
-
-    const times = activeLayoutFor(t.id);
+    const layout = frozenLayout ? frozenLayout.find(x=>x.id===t.id) : null;
+    const startStr = layout ? tzFmt.format(new Date(layout.start)) : "-";
+    const endStr   = layout ? tzFmt.format(new Date(layout.end))   : "-";
 
     tr.innerHTML=`
       <td>${i+1}</td>
-      <td class="work-col">
-        <input type="checkbox" class="work-flag" ${t.is_work ? "checked": ""} title="סמן כעבודה">
-      </td>
+      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
       <td><input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}" ${canEdit?"":"disabled"}></td>
       <td><span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span></td>
-      <td>${times.startStr}</td>
-      <td>${times.endStr}</td>
+      <td>${startStr}</td>
+      <td>${endStr}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
       <td>
         <div class="edit-grid">
@@ -272,67 +231,37 @@ function renderTasks(){
         <button onclick="action('/reset/${t.id}')">איפוס</button>
         <button onclick="action('/set_pending/${t.id}')">Pending</button>
         <button onclick="action('/skip/${t.id}')">דלג</button>
+        <button onclick="action('/done/${t.id}')">✅ Done</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
-
     tb.appendChild(tr);
 
-    // Work checkbox
-    const chk = tr.querySelector(".work-flag");
-    chk.addEventListener("change", async (e)=>{
-      await api(`/workflag/${t.id}`, "POST", {is_work: e.target.checked});
-      t.is_work = e.target.checked;
+    tr.querySelector(".work-flag").onchange = async e=>{
+      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
+      t.is_work=e.target.checked;
       await syncState(true);
-    });
+    };
 
-    // שמירה שלא ייסגר המקלדת בגלל רינדור
     tr.querySelectorAll("input").forEach(inp=>{
       inp.addEventListener("focusin", ()=>isTyping=true);
       inp.addEventListener("focusout", ()=>isTyping=false);
-      inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
     });
   });
-
-  // עדכון אינדיקטור סימולציה ושעת סיום כוללת במצב סימולציה
-  const ind = $("#simIndicator");
-  if (simulationActive) {
-    ind.style.display = "inline-block";
-    $("#overallEnd").textContent = simulationOverall || "-";
-  } else {
-    ind.style.display = "none";
-  }
-}
-
-// עדכון סטטוס מיידי בשורה
-function updateRowStatus(id, status) {
-  const row = document.getElementById(`row-${id}`);
-  if (!row) return;
-  row.className = status;
-  const badge = row.querySelector("td:nth-child(7) span");
-  if (badge) {
-    badge.className = badgeClass(status);
-    badge.textContent = status;
-  }
 }
 
 async function action(url){
   const id=parseInt(url.split("/").pop());
   const t=tasks.find(x=>x.id===id);
   if(t){
-    // שינוי מיידי בדפדפן + ביטול סימולציה כי המציאות השתנתה
-    simulationActive = false;
-    simulationLayout = null;
-    simulationOverall = "-";
-
-    if(url.includes("/start/"))  { t.status="running"; frozenLayout = null; }
-    if(url.includes("/pause/"))  { t.status="paused"; frozenLayout = null; }
-    if(url.includes("/reset/"))  { t.status="running"; t.remaining=t.duration; frozenLayout = null; }
-    if(url.includes("/set_pending/")) { t.status="pending"; frozenLayout = null; }
-    if(url.includes("/skip/"))   { t.status="done"; frozenLayout = null; }
-    if(url.includes("/delete/")) { tasks=tasks.filter(x=>x.id!==id); frozenLayout = null; }
-
-    updateRowStatus(id, t.status);
-    renderTasks();
+    if(url.includes("/start/"))  t.status="running";
+    if(url.includes("/pause/"))  t.status="paused";
+    if(url.includes("/reset/"))  t.status="running";
+    if(url.includes("/set_pending/")) t.status="pending";
+    if(url.includes("/skip/"))   t.status="done";
+    if(url.includes("/done/"))   {t.status="done"; t.remaining=0;}
+    if(url.includes("/delete/")) tasks=tasks.filter(x=>x.id!==id);
+    frozenLayout=null;
+    renderTasks(true);
   }
   await api(url,"POST");
   await syncState(true);
@@ -345,10 +274,6 @@ async function updateTask(id){
   const m=parseInt(row.querySelector(".edit-m").value)||0;
   const s=parseInt(row.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  // כל שינוי אמיתי מבטל סימולציה
-  simulationActive = false;
-  simulationLayout = null;
-  simulationOverall = "-";
   await syncState(true);
 }
 async function extendTask(id){
@@ -357,34 +282,23 @@ async function extendTask(id){
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  simulationActive = false;
-  simulationLayout = null;
-  simulationOverall = "-";
   await syncState(true);
 }
 async function moveTask(id){
   const row=$("#row-"+id);
   const newPos=parseInt(row.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  simulationActive = false;
-  simulationLayout = null;
-  simulationOverall = "-";
   await syncState(true);
 }
 
-// הוספת משימה
 $("#btnAdd").onclick=async()=>{
   const n=$("#newName").value.trim()||"משימה חדשה";
   const h=parseInt($("#newH").value)||0, m=parseInt($("#newM").value)||0, s=parseInt($("#newS").value)||0;
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s});
   $("#newName").value=""; $("#newH").value=0; $("#newM").value=0; $("#newS").value=0;
-  simulationActive = false;
-  simulationLayout = null;
-  simulationOverall = "-";
   await syncState(true);
 };
 
-// ייצוא
 $("#btnExport").onclick = async ()=>{
   const res = await fetch("/export");
   const blob = await res.blob();
@@ -398,7 +312,6 @@ $("#btnExport").onclick = async ()=>{
   URL.revokeObjectURL(url);
 };
 
-// ייבוא
 $("#fileImport").addEventListener("change", async (ev)=>{
   const file = ev.target.files[0];
   if(!file) return;
@@ -406,9 +319,6 @@ $("#fileImport").addEventListener("change", async (ev)=>{
   try{
     const json = JSON.parse(txt);
     await api("/import", "POST", json);
-    simulationActive = false;
-    simulationLayout = null;
-    simulationOverall = "-";
     await syncState(true);
   }catch(e){
     alert("קובץ ייבוא לא תקין.");
@@ -417,55 +327,22 @@ $("#fileImport").addEventListener("change", async (ev)=>{
   }
 });
 
-/* ✅ לולאת עדכון חלקה למסך */
 setInterval(()=>{
-  // מעדכן נותר רק במשימה שרצה – ללא ריענון מלא
   const running = tasks.find(t=>t.status==="running");
   if(running){
     running.remaining = Math.max(0, running.remaining - 1);
-    if(running.remaining === 0) {
-      running.status = "done";
-      frozenLayout = null;
-      simulationActive = false;
-      simulationLayout = null;
-      simulationOverall = "-";
-    }
+    if(running.remaining === 0) running.status="done";
   }
-  // עדכון “נותר”
   document.querySelectorAll(".remain").forEach(span=>{
     const t=tasks.find(x=>x.id==span.dataset.id);
     if(t) span.textContent=fmt(t.remaining);
   });
-
-  // שעון מערכת
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
+  $("#overallEnd").textContent=computeOverallEndLocal();
+},1000);
 
-  // אם אין רצה ולא בסימולציה – נחשב סוף כולל מקומי
-  if(!tasks.some(t=>t.status==="running") && !simulationActive){
-    $("#overallEnd").textContent = computeOverallEndLocal();
-  }
-}, 1000);
-
-// סינכרון מהשרת
-setInterval(()=>syncState(false), 2500);
+setInterval(()=>syncState(false),2500);
 syncState(true);
-
-// ====== כפתורי סימולציה ======
-$("#btnSim").onclick = async ()=>{
-  const t = $("#simTime").value || "08:00";
-  const res = await api("/simulate", "POST", {start_time: t});
-  if (!res || !res.ok) return;
-  simulationActive = true;
-  simulationLayout = res.layout || [];
-  simulationOverall = res.overall_end || "-";
-  renderTasks();
-};
-$("#btnSimClear").onclick = ()=>{
-  simulationActive = false;
-  simulationLayout = null;
-  simulationOverall = "-";
-  renderTasks();
-};
 </script>
 </body>
 </html>
