@@ -247,6 +247,21 @@ def workflag(tid):
             s.add(t)
     return jsonify(ok=True)
 
+# ✅ תוספת חדשה: העברת משימות (Reorder)
+@app.route("/reorder", methods=["POST"])
+def reorder():
+    data = request.json or {}
+    order = data.get("order", [])
+    if not order:
+        return jsonify(ok=False, error="no order data")
+    with session_scope() as s:
+        for item in order:
+            t = s.get(Task, item.get("id"))
+            if t:
+                t.position = int(item.get("position", 0))
+                s.add(t)
+    return jsonify(ok=True)
+
 @app.route("/export")
 def export():
     with session_scope() as s:
