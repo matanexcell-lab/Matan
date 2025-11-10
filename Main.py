@@ -229,6 +229,17 @@ def set_pending(tid):
             s.add(t)
     return jsonify(ok=True)
 
+# ✅ חדש: הפוך את כל המשימות ל-Pending
+@app.route("/set_all_pending", methods=["POST"])
+def set_all_pending():
+    with session_scope() as s:
+        tasks = s.query(Task).all()
+        for t in tasks:
+            t.status = "pending"
+            t.end_time = None
+            s.add(t)
+    return jsonify(ok=True)
+
 @app.route("/delete/<int:tid>", methods=["POST"])
 def delete(tid):
     with session_scope() as s:
@@ -247,7 +258,6 @@ def workflag(tid):
             s.add(t)
     return jsonify(ok=True)
 
-# ✅ תוספת חדשה: העברת משימות (Reorder)
 @app.route("/reorder", methods=["POST"])
 def reorder():
     data = request.json or {}
