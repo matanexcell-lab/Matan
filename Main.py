@@ -53,8 +53,10 @@ def hhmmss(sec):
     m = (sec % 3600) // 60
     s = sec % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
+
+
 # ==========================================
-# 📌 מודל משימה – כולל זמן התחלה אמיתי
+# 📌 מודל משימה
 # ==========================================
 
 class Task(Base):
@@ -63,23 +65,20 @@ class Task(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
 
-    duration = Column(Integer, nullable=False)      # זמן מקורי
-    remaining = Column(Integer, nullable=False)     # זמן נותר
+    duration = Column(Integer, nullable=False)    # זמן מוגדר
+    remaining = Column(Integer, nullable=False)   # זמן שנותר
 
-    status = Column(String, nullable=False)         # running / paused / pending / done
+    status = Column(String, nullable=False)       # running / paused / pending / done
 
-    start_time = Column(DateTime(timezone=True))    # ← נוספה: שעת תחילת ריצה אמיתית
-    end_time = Column(DateTime(timezone=True))      # ← שעת סיום אמיתית
-
+    end_time = Column(DateTime(timezone=True))    # סיום ריצה
     position = Column(Integer, nullable=False, default=0)
+
     is_work = Column(Boolean, nullable=False, default=False)
 
     def to_dict(self):
-        """מחזיר את כל נתוני המשימה לפרונט־אנד"""
         r = self.remaining
         now_ts = now()
 
-        # אם המשימה רצה – לחשב זמן שנותר
         if self.status == "running" and self.end_time:
             if self.end_time.tzinfo is None:
                 self.end_time = TZ.localize(self.end_time)
@@ -93,58 +92,45 @@ class Task(Base):
             "status": self.status,
             "position": self.position,
             "is_work": self.is_work,
-
-            # שעת התחלה אמיתית
-            "start_time_str":
-                self.start_time.astimezone(TZ).strftime("%H:%M:%S")
-                if self.start_time else "-",
-
-            # שעת סיום אמיתית
-            "end_time_str":
-                self.end_time.astimezone(TZ).strftime("%H:%M:%S")
-                if self.end_time else "-"
+            "end_time_str": self.end_time.astimezone(TZ).strftime("%H:%M:%S") if self.end_time else "-"
         }
 
 
 Base.metadata.create_all(engine)
 
+
 # ==========================================
-# ⛓ ניהול שרשרת משימות – כולל זמן התחלה אמיתי
+# ⛓ ניהול שרשרת משימות
 # ==========================================
 
 def recompute_chain():
-    """מעדכן משימות שרצות + מפעיל את הבאה אם צריך"""
+    """מעדכן משימות שרצות ומפעיל את הבאה במידת הצורך"""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         now_ts = now()
 
         for i, t in enumerate(tasks):
 
-            # משימה רצה
             if t.status == "running" and t.end_time:
-
                 if t.end_time.tzinfo is None:
                     t.end_time = TZ.localize(t.end_time)
 
                 rem = int((t.end_time - now_ts).total_seconds())
 
-                # נגמרה
+                # משימה הסתיימה
                 if rem <= 0:
                     t.status = "done"
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
 
-                    # הפעל משימה הבאה שנמצאת ב־pending
+                    # הפעל הבאה
                     for nxt in tasks[i+1:]:
                         if nxt.status == "pending":
                             nxt.status = "running"
-                            nxt.start_time = now_ts
                             nxt.end_time = now_ts + timedelta(seconds=nxt.remaining)
                             s.add(nxt)
                             break
-
-                # עדיין רצה
                 else:
                     t.remaining = rem
                     s.add(t)
@@ -156,8 +142,9 @@ def work_total_seconds():
         rows = s.query(Task).filter(Task.is_work == True).all()
         return sum(t.duration for t in rows)
 
+
 # ==========================================
-# 🌐 Flask
+# 🌐 הגדרת Flask
 # ==========================================
 
 app = Flask(__name__)
@@ -182,6 +169,8 @@ def state():
         "work_total_hhmmss": hhmmss(work_total_seconds()),
         "now": now().strftime("%H:%M:%S")
     })
+
+
 # ==========================================
 # ➕ יצירת משימה
 # ==========================================
@@ -190,23 +179,23 @@ def state():
 def add():
     d = request.json or {}
     name = d.get("name", "משימה חדשה")
-
     h = int(d.get("hours", 0))
     m = int(d.get("minutes", 0))
     s = int(d.get("seconds", 0))
-    pos = int(d.get("position", 1)) - 1
+    pos = int(d.get("position", 1)) - 1  # תיקון: לא +1
 
     dur = h * 3600 + m * 60 + s
 
     with session_scope() as sss:
         tasks = sss.query(Task).order_by(Task.position.asc()).all()
 
+        # דוחף את כולם קדימה אם צריך
         if pos < 0:
             pos = 0
         if pos > len(tasks):
             pos = len(tasks)
 
-        # דוחף משימות קדימה
+        # מזיז משימות קיימות
         for t in tasks:
             if t.position >= pos:
                 t.position += 1
@@ -217,13 +206,12 @@ def add():
             duration=dur,
             remaining=dur,
             status="pending",
-            position=pos,
-            start_time=None,
-            end_time=None
+            position=pos
         )
         sss.add(new_task)
 
     return jsonify({"ok": True})
+
 
 # ==========================================
 # ▶ התחלת משימה
@@ -234,17 +222,11 @@ def start(tid):
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
-
-            # שמירת שעת התחלה אמיתית
-            t.start_time = now()
-
-            # חישוב שעת סיום אמיתית
-            t.end_time = now() + timedelta(seconds=t.remaining)
-
             t.status = "running"
+            t.end_time = now() + timedelta(seconds=t.remaining)
             s.add(t)
-
     return jsonify({"ok": True})
+
 
 # ==========================================
 # ⏸ השהייה
@@ -257,13 +239,11 @@ def pause(tid):
         if t and t.end_time:
             rem = int((t.end_time - now()).total_seconds())
             t.remaining = max(0, rem)
-
             t.status = "paused"
             t.end_time = None
-
             s.add(t)
-
     return jsonify({"ok": True})
+
 
 # ==========================================
 # 🔄 איפוס (רק זמן)
@@ -276,10 +256,10 @@ def reset(tid):
         if t:
             t.remaining = t.duration
             t.status = "paused"
-            t.start_time = None
             t.end_time = None
             s.add(t)
     return jsonify({"ok": True})
+
 
 # ==========================================
 # ✔️ DONE
@@ -296,8 +276,9 @@ def done(tid):
             s.add(t)
     return jsonify({"ok": True})
 
+
 # ==========================================
-# 🔄 החזרה ל־Pending
+# 🔄 החזרה ל-Pending
 # ==========================================
 
 @app.route("/set_pending/<int:tid>", methods=["POST"])
@@ -306,10 +287,10 @@ def set_pending(tid):
         t = s.get(Task, tid)
         if t:
             t.status = "pending"
-            t.start_time = None
             t.end_time = None
             s.add(t)
     return jsonify({"ok": True})
+
 
 # ==========================================
 # ⏩ דילוג למשימה הבאה
@@ -317,29 +298,27 @@ def set_pending(tid):
 
 @app.route("/skip/<int:tid>", methods=["POST"])
 def skip(tid):
-    now_ts = now()
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
-
         for i, t in enumerate(tasks):
             if t.id == tid:
                 t.status = "done"
                 t.remaining = 0
-                t.start_time = None
                 t.end_time = None
                 s.add(t)
                 break
 
         # הפעל הבאה
+        now_ts = now()
         for nxt in tasks[i+1:]:
             if nxt.status == "pending":
                 nxt.status = "running"
-                nxt.start_time = now_ts
                 nxt.end_time = now_ts + timedelta(seconds=nxt.remaining)
                 s.add(nxt)
                 break
 
     return jsonify({"ok": True})
+
 
 # ==========================================
 # ✏️ עדכון משימה
@@ -348,7 +327,6 @@ def skip(tid):
 @app.route("/update/<int:tid>", methods=["POST"])
 def update_task(tid):
     d = request.json or {}
-
     name = d.get("name", "משימה")
 
     h = int(d.get("hours", 0))
@@ -366,12 +344,12 @@ def update_task(tid):
                 t.remaining = dur
 
             if t.status == "running":
-                t.start_time = now()
                 t.end_time = now() + timedelta(seconds=t.remaining)
 
             s.add(t)
 
     return jsonify({"ok": True})
+
 
 # ==========================================
 # ➕ הארכת משימה
@@ -385,7 +363,6 @@ def extend(tid):
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
-
             t.duration += add
             t.remaining += add
 
@@ -396,15 +373,16 @@ def extend(tid):
 
     return jsonify({"ok": True})
 
+
 # ==========================================
-# ↕ שינוי מיקום משימה
+# ↕ העברת משימה (reorder)
 # ==========================================
 
 @app.route("/reorder_single", methods=["POST"])
 def reorder_single():
     d = request.json or {}
     tid = int(d.get("task_id"))
-    new_pos = int(d.get("new_position")) - 1
+    new_pos = int(d.get("new_position")) - 1   # תיקון +1
 
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
@@ -434,6 +412,26 @@ def reorder_single():
 
     return jsonify({"ok": True})
 
+
+# ==========================================
+# 🗑 מחיקה
+# ==========================================
+
+@app.route("/delete/<int:tid>", methods=["POST"])
+def delete(tid):
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if t:
+            s.delete(t)
+
+        tasks = s.query(Task).order_by(Task.position.asc()).all()
+        for i, t in enumerate(tasks):
+            t.position = i
+            s.add(t)
+
+    return jsonify({"ok": True})
+
+
 # ==========================================
 # ייצוא / ייבוא
 # ==========================================
@@ -445,7 +443,6 @@ def export():
         arr = [t.to_dict() for t in tasks]
 
     txt = json.dumps({"tasks": arr}, ensure_ascii=False, indent=2)
-
     resp = make_response(txt)
     resp.headers["Content-Type"] = "application/json"
     resp.headers["Content-Disposition"] = "attachment; filename=tasks_export.json"
@@ -468,8 +465,6 @@ def import_tasks():
                 status=t.get("status", "pending"),
                 position=i,
                 is_work=bool(t.get("is_work", False)),
-
-                start_time=None,      # לא מייבאים זמן עבר
                 end_time=None
             )
             s.add(obj)
