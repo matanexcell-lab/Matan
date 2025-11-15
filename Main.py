@@ -195,7 +195,14 @@ def add():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc(), Task.id.asc()).all()
 
-        if insert_pos is None or insert_pos <= 0 or insert_pos > len(tasks) + 1:
+        if insert_pos is None:
+            insert_pos = len(tasks) + 1
+        try:
+            insert_pos = int(insert_pos)
+        except Exception:
+            insert_pos = len(tasks) + 1
+
+        if insert_pos <= 0 or insert_pos > len(tasks) + 1:
             # מוסיף בסוף
             pos = len(tasks)
             s.add(Task(name=name, duration=dur, remaining=dur, status="pending", position=pos))
@@ -258,13 +265,12 @@ def reset(tid):
     איפוס משימה:
     - מחזיר remaining = duration
     - לא מפעיל שום משימה אחרת
-    - אם הייתה running – הופך ל-paused (או pending, אתה יכול לשנות לטעמך)
+    - אם הייתה running – הופך ל-pending
     """
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
             t.remaining = t.duration
-            # אם היא הייתה רצה – נעצור אותה למצב pending
             if t.status == "running":
                 t.status = "pending"
                 t.end_time = None
@@ -283,7 +289,6 @@ def set_pending(tid):
         if t:
             t.status = "pending"
             t.end_time = None
-            # לא משנים remaining
             s.add(t)
     return jsonify({"ok": True})
 
@@ -509,6 +514,34 @@ def set_all_pending():
             t.status = "pending"
             t.end_time = None
             s.add(t)
+    return jsonify({"ok": True})
+
+
+# ✅ NEW – מחיקת משימה
+@app.route("/delete/<int:tid>", methods=["POST"])
+def delete_task(tid):
+    """
+    מחיקת משימה + סידור המיקומים (position) של שאר המשימות.
+    """
+    with session_scope() as s:
+        t = s.get(Task, tid)
+        if not t:
+            return jsonify({"ok": False, "error": "not found"}), 404
+
+        old_pos = t.position
+        s.delete(t)
+
+        # מורידים position לכל משימה שהייתה אחרי
+        others = (
+            s.query(Task)
+            .filter(Task.position > old_pos)
+            .order_by(Task.position.asc())
+            .all()
+        )
+        for o in others:
+            o.position -= 1
+            s.add(o)
+
     return jsonify({"ok": True})
 
 
