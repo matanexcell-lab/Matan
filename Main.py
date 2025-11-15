@@ -11,10 +11,6 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import declarative_base, sessionmaker, scoped_session
 
-# ==========================================
-# 🌍 הגדרות זמן ומסד נתונים
-# ==========================================
-
 TZ = pytz.timezone("Asia/Jerusalem")
 
 DATABASE_URL = os.getenv(
@@ -55,76 +51,69 @@ def hhmmss(sec):
     return f"{h:02d}:{m:02d}:{s:02d}"
 
 
-# ==========================================
-# 📌 מודל משימה
-# ==========================================
-
 class Task(Base):
     __tablename__ = "tasks"
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
-
-    duration = Column(Integer, nullable=False)    # זמן מוגדר
-    remaining = Column(Integer, nullable=False)   # זמן שנותר
-
-    status = Column(String, nullable=False)       # running / paused / pending / done
-
-    end_time = Column(DateTime(timezone=True))    # סיום ריצה
+    duration = Column(Integer, nullable=False)
+    remaining = Column(Integer, nullable=False)
+    status = Column(String, nullable=False)
+    end_time = Column(DateTime(timezone=True))
     position = Column(Integer, nullable=False, default=0)
-
     is_work = Column(Boolean, nullable=False, default=False)
 
     def to_dict(self):
-        r = self.remaining
         now_ts = now()
+        rem = self.remaining
 
         if self.status == "running" and self.end_time:
-            if self.end_time.tzinfo is None:
-                self.end_time = TZ.localize(self.end_time)
-            r = max(0, int((self.end_time - now_ts).total_seconds()))
+            et = self.end_time
+            if et.tzinfo is None:
+                et = TZ.localize(et)
+            rem = max(0, int((et - now_ts).total_seconds()))
+
+        end_str = "-"
+        if self.end_time:
+            try:
+                end_str = self.end_time.astimezone(TZ).strftime("%H:%M:%S")
+            except:
+                pass
 
         return {
             "id": self.id,
             "name": self.name,
             "duration": self.duration,
-            "remaining": r,
+            "remaining": rem,
             "status": self.status,
             "position": self.position,
             "is_work": self.is_work,
-            "end_time_str": self.end_time.astimezone(TZ).strftime("%H:%M:%S") if self.end_time else "-"
+            "end_time_str": end_str
         }
 
 
 Base.metadata.create_all(engine)
 
 
-# ==========================================
-# ⛓ ניהול שרשרת משימות
-# ==========================================
-
 def recompute_chain():
-    """מעדכן משימות שרצות ומפעיל את הבאה במידת הצורך"""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         now_ts = now()
 
         for i, t in enumerate(tasks):
-
             if t.status == "running" and t.end_time:
-                if t.end_time.tzinfo is None:
-                    t.end_time = TZ.localize(t.end_time)
+                et = t.end_time
+                if et.tzinfo is None:
+                    et = TZ.localize(et)
 
-                rem = int((t.end_time - now_ts).total_seconds())
+                rem = int((et - now_ts).total_seconds())
 
-                # משימה הסתיימה
                 if rem <= 0:
                     t.status = "done"
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
 
-                    # הפעל הבאה
                     for nxt in tasks[i+1:]:
                         if nxt.status == "pending":
                             nxt.status = "running"
@@ -137,15 +126,10 @@ def recompute_chain():
 
 
 def work_total_seconds():
-    """מחזיר זמן כולל של משימות שסומנו כעבודה"""
     with session_scope() as s:
         rows = s.query(Task).filter(Task.is_work == True).all()
         return sum(t.duration for t in rows)
 
-
-# ==========================================
-# 🌐 הגדרת Flask
-# ==========================================
 
 app = Flask(__name__)
 
@@ -171,51 +155,40 @@ def state():
     })
 
 
-# ==========================================
-# ➕ יצירת משימה
-# ==========================================
-
 @app.route("/add", methods=["POST"])
 def add():
     d = request.json or {}
+
     name = d.get("name", "משימה חדשה")
     h = int(d.get("hours", 0))
     m = int(d.get("minutes", 0))
-    s = int(d.get("seconds", 0))
-    pos = int(d.get("position", 1)) - 1  # תיקון: לא +1
+    ssec = int(d.get("seconds", 0))
+    pos = int(d.get("position", 1)) - 1
 
-    dur = h * 3600 + m * 60 + s
+    dur = h * 3600 + m * 60 + ssec
 
-    with session_scope() as sss:
-        tasks = sss.query(Task).order_by(Task.position.asc()).all()
+    with session_scope() as s:
+        tasks = s.query(Task).order_by(Task.position.asc()).all()
 
-        # דוחף את כולם קדימה אם צריך
-        if pos < 0:
-            pos = 0
-        if pos > len(tasks):
-            pos = len(tasks)
+        if pos < 0: pos = 0
+        if pos > len(tasks): pos = len(tasks)
 
-        # מזיז משימות קיימות
         for t in tasks:
             if t.position >= pos:
                 t.position += 1
-                sss.add(t)
+                s.add(t)
 
-        new_task = Task(
+        new = Task(
             name=name,
             duration=dur,
             remaining=dur,
             status="pending",
             position=pos
         )
-        sss.add(new_task)
+        s.add(new)
 
     return jsonify({"ok": True})
 
-
-# ==========================================
-# ▶ התחלת משימה
-# ==========================================
 
 @app.route("/start/<int:tid>", methods=["POST"])
 def start(tid):
@@ -227,10 +200,6 @@ def start(tid):
             s.add(t)
     return jsonify({"ok": True})
 
-
-# ==========================================
-# ⏸ השהייה
-# ==========================================
 
 @app.route("/pause/<int:tid>", methods=["POST"])
 def pause(tid):
@@ -245,10 +214,6 @@ def pause(tid):
     return jsonify({"ok": True})
 
 
-# ==========================================
-# 🔄 איפוס (רק זמן)
-# ==========================================
-
 @app.route("/reset/<int:tid>", methods=["POST"])
 def reset(tid):
     with session_scope() as s:
@@ -261,25 +226,17 @@ def reset(tid):
     return jsonify({"ok": True})
 
 
-# ==========================================
-# ✔️ DONE
-# ==========================================
-
 @app.route("/done/<int:tid>", methods=["POST"])
 def done(tid):
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
-            t.remaining = 0
             t.status = "done"
+            t.remaining = 0
             t.end_time = None
             s.add(t)
     return jsonify({"ok": True})
 
-
-# ==========================================
-# 🔄 החזרה ל-Pending
-# ==========================================
 
 @app.route("/set_pending/<int:tid>", methods=["POST"])
 def set_pending(tid):
@@ -292,14 +249,11 @@ def set_pending(tid):
     return jsonify({"ok": True})
 
 
-# ==========================================
-# ⏩ דילוג למשימה הבאה
-# ==========================================
-
 @app.route("/skip/<int:tid>", methods=["POST"])
 def skip(tid):
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
+
         for i, t in enumerate(tasks):
             if t.id == tid:
                 t.status = "done"
@@ -308,7 +262,6 @@ def skip(tid):
                 s.add(t)
                 break
 
-        # הפעל הבאה
         now_ts = now()
         for nxt in tasks[i+1:]:
             if nxt.status == "pending":
@@ -319,10 +272,6 @@ def skip(tid):
 
     return jsonify({"ok": True})
 
-
-# ==========================================
-# ✏️ עדכון משימה
-# ==========================================
 
 @app.route("/update/<int:tid>", methods=["POST"])
 def update_task(tid):
@@ -339,58 +288,41 @@ def update_task(tid):
         if t:
             t.name = name
             t.duration = dur
-
-            if t.status in ["pending", "paused", "running"]:
+            if t.status in ["pending","paused","running"]:
                 t.remaining = dur
-
             if t.status == "running":
                 t.end_time = now() + timedelta(seconds=t.remaining)
-
             s.add(t)
-
     return jsonify({"ok": True})
 
-
-# ==========================================
-# ➕ הארכת משימה
-# ==========================================
 
 @app.route("/extend/<int:tid>", methods=["POST"])
 def extend(tid):
     d = request.json or {}
-    add = int(d.get("hours", 0)) * 3600 + int(d.get("minutes", 0)) * 60 + int(d.get("seconds", 0))
+    add = int(d.get("hours",0))*3600 + int(d.get("minutes",0))*60 + int(d.get("seconds",0))
 
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
             t.duration += add
             t.remaining += add
-
             if t.status == "running":
                 t.end_time = now() + timedelta(seconds=t.remaining)
-
             s.add(t)
-
     return jsonify({"ok": True})
 
-
-# ==========================================
-# ↕ העברת משימה (reorder)
-# ==========================================
 
 @app.route("/reorder_single", methods=["POST"])
 def reorder_single():
     d = request.json or {}
     tid = int(d.get("task_id"))
-    new_pos = int(d.get("new_position")) - 1   # תיקון +1
+    new_pos = int(d.get("new_position")) - 1
 
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
 
-        if new_pos < 0:
-            new_pos = 0
-        if new_pos > len(tasks):
-            new_pos = len(tasks)
+        if new_pos < 0: new_pos = 0
+        if new_pos > len(tasks): new_pos = len(tasks)
 
         moving = s.get(Task, tid)
         if not moving:
@@ -399,8 +331,7 @@ def reorder_single():
         old_pos = moving.position
 
         for t in tasks:
-            if t.id == tid:
-                continue
+            if t.id == tid: continue
             if old_pos < new_pos and old_pos < t.position <= new_pos:
                 t.position -= 1
             elif new_pos <= t.position < old_pos:
@@ -412,10 +343,6 @@ def reorder_single():
 
     return jsonify({"ok": True})
 
-
-# ==========================================
-# 🗑 מחיקה
-# ==========================================
 
 @app.route("/delete/<int:tid>", methods=["POST"])
 def delete(tid):
@@ -431,10 +358,6 @@ def delete(tid):
 
     return jsonify({"ok": True})
 
-
-# ==========================================
-# ייצוא / ייבוא
-# ==========================================
 
 @app.route("/export")
 def export():
@@ -471,10 +394,6 @@ def import_tasks():
 
     return jsonify({"ok": True})
 
-
-# ==========================================
-# 🚀 ריצה
-# ==========================================
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
