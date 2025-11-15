@@ -93,9 +93,29 @@ const $ = s => document.querySelector(s);
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
-let isTyping = false;
 let frozenLayout = null;
 let showSimulation = true;
+let blockSync = false;      // 🔹 מונע סנכרון בזמן פעולה
+let simUserValue = null;    // 🔹 שמירת שעת סימולציה
+
+// אתחול ערך סימולציה מה-localStorage (אם יש)
+(function initSimTime(){
+  try {
+    const saved = localStorage.getItem("simStartTime");
+    if ($("#simStartTime")) {
+      if (saved) {
+        $("#simStartTime").value = saved;
+        simUserValue = saved;
+      } else {
+        simUserValue = $("#simStartTime").value || "08:00";
+      }
+    } else {
+      simUserValue = "08:00";
+    }
+  } catch (e) {
+    simUserValue = $("#simStartTime") ? ($("#simStartTime").value || "08:00") : "08:00";
+  }
+})();
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
@@ -178,7 +198,7 @@ function computeTimesOnce(){
 }
 
 function computeSimulationLayout(){
-  const timeStr = $("#simStartTime").value || "08:00";
+  const timeStr = simUserValue || $("#simStartTime").value || "08:00";
   const [hh, mm] = timeStr.split(":").map(x=>parseInt(x)||0);
   const nowDate = new Date();
   const simStart = new Date(
@@ -205,7 +225,7 @@ function computeSimulationLayout(){
 
 async function syncState(force=false){
   const now = Date.now();
-  if(syncing) return;
+  if(syncing || blockSync) return;
   if(!force && now - lastServerSync < 2000) return;
   syncing = true;
   const data = await api("/state");
@@ -226,7 +246,6 @@ async function syncState(force=false){
 }
 
 function renderTasks(){
-  if(isTyping) return;
   const tb=$("#tbody");
   tb.innerHTML="";
 
@@ -282,7 +301,6 @@ function renderTasks(){
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
 
-    // ⭐ קודם הסימולציה (כמו שביקשת)
     if(showSimulation){
       const sim = simLayout.find(x => x.id === t.id);
       const simTr = document.createElement("tr");
@@ -299,7 +317,6 @@ function renderTasks(){
       tb.appendChild(simTr);
     }
 
-    // ⭐ ורק אחרי זה המשימה
     tb.appendChild(tr);
 
     tr.querySelector(".work-flag").onchange = async e=>{
@@ -307,17 +324,18 @@ function renderTasks(){
       t.is_work=e.target.checked;
       await syncState(true);
     };
-
-    tr.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focusin", ()=>isTyping=true);
-      inp.addEventListener("focusout", ()=>isTyping=false);
-      inp.addEventListener("touchstart", ()=>isTyping=true, {passive:true});
-    });
   });
+
+  // לוודא שהשעה בשדה סימולציה משקפת את מה ששמרנו
+  if ($("#simStartTime") && simUserValue) {
+    $("#simStartTime").value = simUserValue;
+  }
 }
 
 async function action(url){
+  blockSync = true;
   await api(url,"POST");
+  blockSync = false;
   await syncState(true);
 }
 
@@ -373,6 +391,10 @@ $("#btnSimToggle").onclick = ()=>{
 };
 
 $("#simStartTime").addEventListener("change", ()=>{
+  simUserValue = $("#simStartTime").value || "08:00";
+  try {
+    localStorage.setItem("simStartTime", simUserValue);
+  } catch(e){}
   renderTasks();
 });
 
@@ -409,7 +431,12 @@ setInterval(()=>{
   $("#overallEnd").textContent=computeOverallEndLocal();
 },1000);
 
-setInterval(()=>syncState(false),2500);
+setInterval(()=>{
+  if(!blockSync){
+    syncState(false);
+  }
+},2500);
+
 syncState(true);
 </script>
 </body>
