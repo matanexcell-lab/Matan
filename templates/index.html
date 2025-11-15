@@ -281,9 +281,8 @@ function renderTasks(){
         <button onclick="action('/done/${t.id}')">✅ Done</button>
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>`;
-    
-    tb.appendChild(tr);
 
+    // ⭐ קודם הסימולציה (כמו שביקשת)
     if(showSimulation){
       const sim = simLayout.find(x => x.id === t.id);
       const simTr = document.createElement("tr");
@@ -296,8 +295,12 @@ function renderTasks(){
           <span class="sim-label">סימולציה</span> – התחלה: <b>${simStartStr}</b>,
           סיום: <b>${simEndStr}</b>
         </td>`;
+
       tb.appendChild(simTr);
     }
+
+    // ⭐ ורק אחרי זה המשימה
+    tb.appendChild(tr);
 
     tr.querySelector(".work-flag").onchange = async e=>{
       await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
@@ -401,13 +404,11 @@ $("#fileImport").addEventListener("change", async (ev)=>{
   }
 });
 
-/* רענון חלק — השעה וסיום כולל */
 setInterval(()=>{
   $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent=computeOverallEndLocal();
 },1000);
 
-/* סנכרון עם השרת */
 setInterval(()=>syncState(false),2500);
 syncState(true);
 </script>
