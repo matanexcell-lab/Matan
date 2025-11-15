@@ -12,12 +12,11 @@
     input[type="number"] { width: 64px; }
     input[type="text"] { width: 180px; }
     .muted { color: #777; font-size: 12px; }
-
     .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; }
-    .paused  { background:#fff0b3; }
-    .pending { background:#f2f2f2; }
-    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; }
+    .running { background:#d9ffd9; transition: background-color 0.4s ease; }
+    .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
+    .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
+    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
 
     button { cursor:pointer; }
     .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
@@ -25,11 +24,16 @@
       display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
     }
 
+    tr { transition: background-color 0.4s ease; }
+    .toolbar { text-align:center; margin-bottom:10px }
+    .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
+    .work-col { width: 42px; }
+
     .sim-line {
       font-size: 11px;
       color:#444;
+      margin-top:3px;
       display:block;
-      margin-top:2px;
     }
   </style>
 </head>
@@ -67,7 +71,7 @@
   <thead>
     <tr>
       <th>#</th>
-      <th>עבודה</th>
+      <th class="work-col">עבודה</th>
       <th>שם</th>
       <th>נותר</th>
       <th>שעת התחלה</th>
@@ -84,107 +88,128 @@
 
 <script>
 const $ = s => document.querySelector(s);
-
 let tasks = [];
 let syncing = false;
 let lastServerSync = 0;
+let isTyping = false;
 let simVisible = true;
 
 const tzFmt = new Intl.DateTimeFormat('he-IL', {
   timeZone: 'Asia/Jerusalem',
   hour12: false,
-  hour:'2-digit', minute:'2-digit', second:'2-digit'
+  hour: '2-digit', minute: '2-digit', second: '2-digit'
 });
 
-function fmt(sec){
-  sec=Math.max(0,parseInt(sec||0));
-  let h = Math.floor(sec/3600),
-      m = Math.floor((sec%3600)/60),
-      s = sec%60;
+function fmt(t){
+  t=Math.max(0,parseInt(t||0));
+  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
   return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
-async function api(url,method="GET",body=null){
+function badgeClass(st){
+  if(st==='running') return 'badge running';
+  if(st==='paused')  return 'badge paused';
+  if(st==='pending') return 'badge pending';
+  return 'badge done';
+}
+
+async function api(url, method="GET", body=null){
   try{
-    let r=await fetch(url,{
+    const res=await fetch(url,{
       method,
       headers:{'Content-Type':'application/json'},
       body:body?JSON.stringify(body):null
     });
-    return await r.json();
-  } catch { return null; }
+    return await res.json();
+  }catch{return null;}
 }
 
-function simulatedTimes(){
-  let map={}, base=Date.now();
+function computeSimulatedTimes(){
+  let out = {};
+  let base = Date.now();
+
   for(const t of tasks){
-    let dur = (t.remaining||0)*1000;
-    map[t.id] = {
-      start: tzFmt.format(new Date(base)),
-      end:   tzFmt.format(new Date(base+dur))
-    };
-    base += dur;
+    const ms = (t.remaining || 0) * 1000;
+    const start = tzFmt.format(new Date(base));
+    const end   = tzFmt.format(new Date(base + ms));
+    out[t.id] = {start, end};
+    base += ms;
   }
-  return map;
+  return out;
+}
+
+function computeOverallEndLocal(){
+  let total=0;
+  for(const t of tasks){
+    if(["running","paused","pending"].includes(t.status))
+      total+=t.remaining;
+  }
+  if(!total) return "-";
+  return tzFmt.format(new Date(Date.now()+total*1000));
 }
 
 async function syncState(force=false){
-  if(syncing) return;
   const now=Date.now();
-  if(!force && now - lastServerSync < 2000) return;
+  if(syncing) return;
+  if(!force && now-lastServerSync < 2000) return;
 
   syncing=true;
-  let data = await api("/state");
+  const data=await api("/state");
   syncing=false;
-  lastServerSync = now;
-  if(!data || !data.ok) return;
+  lastServerSync=now;
+  if(!data||!data.ok) return;
 
-  tasks = data.tasks;
-  $("#now").textContent = data.now;
-  $("#workTotal").textContent = data.work_total_hhmmss;
+  tasks=data.tasks;
+
+  $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
+  $("#now").textContent = data.now || "";
+  $("#overallEnd").textContent = computeOverallEndLocal();
 
   renderTasks();
 }
 
 function renderTasks(){
-  const sim = simulatedTimes();
-  const tb = $("#tbody");
+  if(isTyping) return;
+
+  const sim = computeSimulatedTimes();
+  const tb=$("#tbody");
   tb.innerHTML="";
 
   tasks.forEach((t,i)=>{
-    let row=document.createElement("tr");
+    const row=document.createElement("tr");
     row.id="row-"+t.id;
+    row.className=t.status;
 
-    // HERE WE ADD SIMULATION RIGHT BELOW THE REAL TIME FIELDS
+    const simStart = sim[t.id].start;
+    const simEnd   = sim[t.id].end;
 
-    let realStart = "-";
-    let realEnd   = t.end_time_str || "-";
-
-    let simStart = sim[t.id].start;
-    let simEnd   = sim[t.id].end;
-
-    row.innerHTML = `
+    row.innerHTML=`
       <td>${i+1}</td>
-      <td><input type="checkbox" class="work-flag" ${t.is_work ? "checked":""}></td>
 
-      <td><input class="edit-name" value="${t.name.replace(/"/g,'&quot;')}"></td>
-
-      <td>
-        ${fmt(t.remaining)}
-        ${simVisible? `<span class="sim-line">→ ${fmt(t.remaining)}</span>`:""}
+      <td class="work-col">
+        <input type="checkbox" class="work-flag" ${t.is_work?"checked":""}>
       </td>
 
       <td>
-        ${realStart}
-        ${simVisible? `<span class="sim-line">→ ${simStart}</span>`:""}
+        <input class="edit-name" type="text" value="${t.name}">
       </td>
 
       <td>
-        ${realEnd}
-        ${simVisible? `<span class="sim-line">→ ${simEnd}</span>`:""}
+        <span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span><br>
+        ${simVisible ? `<span class="sim-line">${fmt(t.remaining)}</span>` : ""}
       </td>
 
-      <td>${t.status}</td>
+      <td>
+        ${"-"}<br>
+        ${simVisible ? `<span class="sim-line">${simStart}</span>` : ""}
+      </td>
+
+      <td>
+        ${t.end_time_str || "-"}<br>
+        ${simVisible ? `<span class="sim-line">${simEnd}</span>` : ""}
+      </td>
+
+      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
 
       <td>
         <div class="edit-grid">
@@ -197,16 +222,16 @@ function renderTasks(){
 
       <td>
         <div class="extend-grid">
-          <input class="ext-h" type="number" value="0">:
-          <input class="ext-m" type="number" value="0">:
-          <input class="ext-s" type="number" value="0">
+          <input class="ext-h" type="number" min="0" value="0">:
+          <input class="ext-m" type="number" min="0" value="0">: 
+          <input class="ext-s" type="number" min="0" value="0">
           <button onclick="extendTask(${t.id})">הארך</button>
         </div>
       </td>
 
       <td>
         <div class="move-grid">
-          <input class="move-to" type="number" value="${i+1}">
+          <input class="move-to" type="number" min="1" value="${i+1}">
           <button onclick="moveTask(${t.id})">העבר</button>
         </div>
       </td>
@@ -215,9 +240,9 @@ function renderTasks(){
         <button onclick="action('/start/${t.id}')">▶</button>
         <button onclick="action('/pause/${t.id}')">⏸</button>
         <button onclick="action('/reset/${t.id}')">🔄</button>
-        <button onclick="action('/set_pending/${t.id}')">P</button>
+        <button onclick="action('/set_pending/${t.id}')">Pending</button>
         <button onclick="action('/skip/${t.id}')">דלג</button>
-        <button onclick="action('/done/${t.id}')">✔</button>
+        <button onclick="action('/done/${t.id}')">Done</button>
         <button onclick="action('/delete/${t.id}')">🗑</button>
       </td>
     `;
@@ -228,6 +253,11 @@ function renderTasks(){
       await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
       await syncState(true);
     };
+
+    row.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focusin",()=>isTyping=true);
+      inp.addEventListener("focusout",()=>isTyping=false);
+    });
   });
 }
 
@@ -237,39 +267,45 @@ async function action(url){
 }
 
 async function updateTask(id){
-  let r=$("#row-"+id);
-  let nm=r.querySelector(".edit-name").value;
-  let h=parseInt(r.querySelector(".edit-h").value)||0;
-  let m=parseInt(r.querySelector(".edit-m").value)||0;
-  let s=parseInt(r.querySelector(".edit-s").value)||0;
+  const r=$("#row-"+id);
+  const nm=r.querySelector(".edit-name").value;
+  const h=parseInt(r.querySelector(".edit-h").value)||0;
+  const m=parseInt(r.querySelector(".edit-m").value)||0;
+  const s=parseInt(r.querySelector(".edit-s").value)||0;
   await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 
 async function extendTask(id){
-  let r=$("#row-"+id);
-  let h=parseInt(r.querySelector(".ext-h").value)||0;
-  let m=parseInt(r.querySelector(".ext-m").value)||0;
-  let s=parseInt(r.querySelector(".ext-s").value)||0;
+  const r=$("#row-"+id);
+  const h=parseInt(r.querySelector(".ext-h").value)||0;
+  const m=parseInt(r.querySelector(".ext-m").value)||0;
+  const s=parseInt(r.querySelector(".ext-s").value)||0;
   await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
   await syncState(true);
 }
 
 async function moveTask(id){
-  let r=$("#row-"+id);
-  let newPos=parseInt(r.querySelector(".move-to").value)||1;
+  const r=$("#row-"+id);
+  const newPos=parseInt(r.querySelector(".move-to").value)||1;
   await api("/reorder_single","POST",{task_id:id,new_position:newPos});
   await syncState(true);
 }
 
 $("#btnAdd").onclick=async()=>{
-  const n=$("#newName").value.trim()||"משימה חדשה";
+  const n=$("#newName").value;
   const h=parseInt($("#newH").value)||0;
   const m=parseInt($("#newM").value)||0;
   const s=parseInt($("#newS").value)||0;
   const pos=parseInt($("#newPos").value)||1;
 
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s,position:pos});
+  $("#newName").value="";
+  $("#newH").value=0;
+  $("#newM").value=0;
+  $("#newS").value=0;
+  $("#newPos").value=1;
+
   await syncState(true);
 };
 
@@ -279,9 +315,51 @@ $("#btnSimToggle").onclick=()=>{
   renderTasks();
 };
 
-setInterval(()=>syncState(false),2000);
-syncState(true);
+$("#btnExport").onclick = async ()=>{
+  const res = await fetch("/export");
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a=document.createElement("a");
+  a.href=url;
+  a.download="tasks_export.json";
+  a.click();
+  URL.revokeObjectURL(url);
+};
 
+$("#fileImport").onchange=async ev=>{
+  const f=ev.target.files[0];
+  if(!f) return;
+  const txt=await f.text();
+  try{
+    const j=JSON.parse(txt);
+    await api("/import","POST",j);
+    await syncState(true);
+  }catch(e){
+    alert("קובץ לא תקין");
+  }
+  ev.target.value="";
+};
+
+setInterval(()=>{
+  const run=tasks.find(t=>t.status==="running");
+  if(run){
+    run.remaining=Math.max(0,run.remaining-1);
+    if(run.remaining===0){
+      run.status="done";
+    }
+  }
+
+  document.querySelectorAll(".remain").forEach(s=>{
+    const t=tasks.find(x=>x.id==s.dataset.id);
+    if(t) s.textContent = fmt(t.remaining);
+  });
+
+  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
+  $("#overallEnd").textContent=computeOverallEndLocal();
+},1000);
+
+setInterval(()=>syncState(false),2500);
+syncState(true);
 </script>
 
 </body>
