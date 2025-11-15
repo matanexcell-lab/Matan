@@ -1,371 +1,312 @@
 <!doctype html>
 <html lang="he" dir="rtl">
 <head>
-  <meta charset="utf-8"/>
-  <title>⏱️ טיימר משימות</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <style>
-    body { font-family: Arial, sans-serif; direction: rtl; background:#fafafa; }
-    h1 { text-align:center; }
-    table { width: 100%; border-collapse: collapse; margin-top:15px; background:white; }
-    th, td { border: 1px solid #999; padding: 6px; text-align: center; }
-    input[type="number"] { width: 64px; }
-    input[type="text"] { width: 180px; }
-    .muted { color: #777; font-size: 12px; }
-    .badge { display:inline-block; padding:2px 6px; border-radius:6px; font-size:12px;}
-    .running { background:#d9ffd9; transition: background-color 0.4s ease; }
-    .paused  { background:#fff0b3; transition: background-color 0.4s ease; }
-    .pending { background:#f2f2f2; transition: background-color 0.4s ease; }
-    .done    { background:#e6e6e6; color:#666; text-decoration: line-through; transition: background-color 0.4s ease; }
+<meta charset="utf-8"/>
+<title>טיימר משימות</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 
-    button { cursor:pointer; }
-    .row-actions { display:flex; gap:4px; flex-wrap:wrap; justify-content:center; }
-    .edit-grid, .extend-grid, .move-grid {
-      display:flex; gap:6px; align-items:center; justify-content:center; flex-wrap:wrap;
-    }
+<style>
+body { font-family: Arial, sans-serif; direction: rtl; background: #fafafa; }
+h1 { text-align: center; }
+table { width: 100%; border-collapse: collapse; background: white; margin-top: 15px; }
+th, td { border: 1px solid #888; padding: 6px; text-align: center; }
 
-    tr { transition: background-color 0.4s ease; }
-    .toolbar { text-align:center; margin-bottom:10px }
-    .tools { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-bottom:10px }
-    .work-col { width: 42px; }
+input[type="number"] { width: 60px; }
+input[type="text"] { width: 160px; }
 
-    .sim-line {
-      font-size: 11px;
-      color:#444;
-      margin-top:3px;
-      display:block;
-    }
-  </style>
+.badge { padding: 3px 6px; border-radius: 4px; font-size: 12px; }
+.running { background: #d9ffd9; }
+.paused { background: #fff3cd; }
+.pending { background: #f0f0f0; }
+.done { background: #e3e3e3; text-decoration: line-through; }
+
+.sim-row { background: #eef6ff; color: #003366; font-size: 12px; }
+.hidden { display: none; }
+
+.toolbar { text-align: center; margin-bottom: 10px; }
+.tools { display: flex; justify-content: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.row-actions { display: flex; justify-content: center; flex-wrap: wrap; gap: 6px; }
+</style>
 </head>
+
 <body>
 
-<h1>⏱️ טיימר משימות</h1>
+<h1>טיימר משימות</h1>
 
 <div class="toolbar">
-  <div id="now" class="muted"></div>
+  <div id="now" style="color: #555; font-size: 12px;"></div>
   <b>שעת סיום כוללת:</b> <span id="overallEnd">-</span><br>
-  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span><br>
-  <button id="btnSimToggle">הסתר סימולציה</button>
+  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span><br><br>
+  <button id="toggleSim">הסתר סימולציה</button>
 </div>
 
 <div class="tools">
-  <span>
+  <div>
     <input id="newName" type="text" placeholder="שם משימה">
-    <input id="newH" type="number" min="0" value="0"> שעות
-    <input id="newM" type="number" min="0" value="0"> דקות
-    <input id="newS" type="number" min="0" value="0"> שניות
-    <input id="newPos" type="number" min="1" value="1" style="width:55px"> מיקום
-    <button id="btnAdd">➕ הוסף</button>
-  </span>
+    <input id="newH" type="number" min="0" value="0">ש
+    <input id="newM" type="number" min="0" value="0">ד
+    <input id="newS" type="number" min="0" value="0">ש
+    <input id="newPos" type="number" min="1" value="1" style="width:50px">מיקום
+    <button id="btnAdd">הוסף</button>
+  </div>
 
-  <span>
-    <button id="btnExport">📤 ייצא</button>
+  <div>
+    <button id="btnExport">יצא</button>
     <label style="cursor:pointer">
-      📥 ייבא
+      ייבא
       <input id="fileImport" type="file" accept="application/json" style="display:none">
     </label>
-  </span>
+  </div>
 </div>
 
 <table>
-  <thead>
-    <tr>
-      <th>#</th>
-      <th class="work-col">עבודה</th>
-      <th>שם</th>
-      <th>נותר</th>
-      <th>שעת התחלה</th>
-      <th>שעת סיום</th>
-      <th>סטטוס</th>
-      <th>עריכה</th>
-      <th>הארכה</th>
-      <th>העברה</th>
-      <th>פעולות</th>
-    </tr>
-  </thead>
-  <tbody id="tbody"></tbody>
+<thead>
+<tr>
+  <th>#</th>
+  <th>עבודה</th>
+  <th>שם</th>
+  <th>נותר</th>
+  <th>התחלה</th>
+  <th>סיום</th>
+  <th>סטטוס</th>
+  <th>עריכה</th>
+  <th>הארכה</th>
+  <th>העברה</th>
+  <th>פעולות</th>
+</tr>
+</thead>
+
+<tbody id="tbody"></tbody>
 </table>
 
 <script>
-const $ = s => document.querySelector(s);
+const $ = (s)=>document.querySelector(s);
 let tasks = [];
-let syncing = false;
-let lastServerSync = 0;
-let isTyping = false;
-let frozenLayout = null;
-let simVisible = true;
+let showSimulation = true;
 
-const tzFmt = new Intl.DateTimeFormat('he-IL', {
-  timeZone: 'Asia/Jerusalem',
-  hour12: false,
-  hour: '2-digit', minute: '2-digit', second: '2-digit'
-});
-
-function fmt(t){
-  t=Math.max(0,parseInt(t||0));
-  let h=Math.floor(t/3600),m=Math.floor((t%3600)/60),s=t%60;
-  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+function load() {
+  const saved = localStorage.getItem("tasks");
+  if (saved) tasks = JSON.parse(saved);
+  render();
 }
 
-function badgeClass(st){
-  if(st==='running') return 'badge running';
-  if(st==='paused')  return 'badge paused';
-  if(st==='pending') return 'badge pending';
-  return 'badge done';
+function save() {
+  localStorage.setItem("tasks", JSON.stringify(tasks));
 }
 
-async function api(url, method="GET", body=null){
-  try{
-    const res=await fetch(url,{
-      method,
-      headers:{'Content-Type':'application/json'},
-      body:body?JSON.stringify(body):null
-    });
-    return await res.json();
-  }catch{return null;}
+function fmt(sec){
+  if (sec < 0) sec = 0;
+  let h = Math.floor(sec/3600);
+  let m = Math.floor((sec%3600)/60);
+  let s = sec%60;
+  return (h+"").padStart(2,"0")+":"+(m+"").padStart(2,"0")+":"+(s+"").padStart(2,"0");
 }
 
-function computeSimulatedTimes(){
-  let out = {};
-  let base = Date.now();
-
-  for(const t of tasks){
-    const ms = (t.remaining || 0) * 1000;
-    const start = tzFmt.format(new Date(base));
-    const end   = tzFmt.format(new Date(base + ms));
-    out[t.id] = {start, end};
-    base += ms;
-  }
-  return out;
+function nowTime(){
+  let d=new Date();
+  return d.toLocaleTimeString("he-IL",{hour12:false});
 }
+setInterval(()=>{ $("#now").textContent=nowTime(); },1000);
 
-function computeOverallEndLocal(){
+function recalcOverallEnd(){
   let total=0;
-  for(const t of tasks){
-    if(["running","paused","pending"].includes(t.status))
-      total+=t.remaining;
+  tasks.forEach(t => { if (t.status!=="done") total+=t.remaining; });
+  $("#workTotal").textContent = fmt(total);
+
+  let d=new Date();
+  d.setSeconds(d.getSeconds()+total);
+  $("#overallEnd").textContent = d.toLocaleTimeString("he-IL",{hour12:false});
+}
+
+function addTask(){
+  let name=$("#newName").value.trim();
+  let h=+$("#newH").value;
+  let m=+$("#newM").value;
+  let s=+$("#newS").value;
+  let pos=+$("#newPos").value;
+
+  if (!name) return;
+
+  let total=h*3600+m*60+s;
+  if (total<=0) total=60;
+
+  let start="-";
+  let end="-";
+
+  let t={name,remaining:total,start,end,status:"pending"};
+  tasks.splice(Math.max(0,pos-1),0,t);
+
+  save();
+  render();
+}
+
+$("#btnAdd").onclick = addTask;
+
+function updateTask(i){
+  let h=+document.querySelector(`#uh${i}`).value;
+  let m=+document.querySelector(`#um${i}`).value;
+  let s=+document.querySelector(`#us${i}`).value;
+
+  let total=h*3600+m*60+s;
+  if (total<=0) total=60;
+
+  tasks[i].remaining=total;
+  tasks[i].start="-";
+  tasks[i].end="-";
+  save();
+  render();
+}
+
+function extendTask(i){
+  let h=+document.querySelector(`#eh${i}`).value;
+  let m=+document.querySelector(`#em${i}`).value;
+  let s=+document.querySelector(`#es${i}`).value;
+  let add=h*3600+m*60+s;
+  if (add>0) tasks[i].remaining += add;
+  save();
+  render();
+}
+
+function moveTask(i){
+  let to = prompt("הכנס מיקום חדש:", i+1);
+  if (!to) return;
+  to = +to-1;
+  if (to<0) to=0;
+  if (to>=tasks.length) to=tasks.length-1;
+  let t=tasks.splice(i,1)[0];
+  tasks.splice(to,0,t);
+  save();
+  render();
+}
+
+function del(i){
+  tasks.splice(i,1);
+  save();
+  render();
+}
+
+function setStatus(i,status){
+  let t = tasks[i];
+
+  if (status === "running"){
+    tasks.forEach(x => {
+      if (x !== t && x.status === "running") x.status="paused";
+    });
+    t.start = nowTime();
   }
-  if(!total) return "-";
-  return tzFmt.format(new Date(Date.now()+total*1000));
+
+  if (status === "paused"){
+    t.end = nowTime();
+  }
+
+  if (status === "done"){
+    t.status="done";
+    t.start="-";
+    t.end="-";
+    save();
+    render();
+    return;
+  }
+
+  t.status = status;
+  save();
+  render();
 }
 
-function computeTimesOnce(){
-  const now=Date.now();
-  frozenLayout = computeSimulatedTimes();
+function resetTask(i){
+  tasks[i].remaining = 0;
+  tasks[i].start="-";
+  tasks[i].end="-";
+  save();
+  render();
+}
+function simulateTask(t, startSim){
+  let start = new Date(startSim.getTime());
+  let end   = new Date(startSim.getTime() + t.remaining*1000);
+  return {
+    start: start.toLocaleTimeString("he-IL",{hour12:false}),
+    end:   end.toLocaleTimeString("he-IL",{hour12:false})
+  };
 }
 
-async function syncState(force=false){
-  const now=Date.now();
-  if(syncing) return;
-  if(!force && now-lastServerSync < 2000) return;
+function render(){
+  const tbody = $("#tbody");
+  tbody.innerHTML = "";
 
-  syncing=true;
-  const data=await api("/state");
-  syncing=false;
-  lastServerSync=now;
-  if(!data||!data.ok) return;
-
-  tasks=data.tasks;
-  $("#workTotal").textContent = data.work_total_hhmmss || "00:00:00";
-  $("#now").textContent = data.now || "";
-  $("#overallEnd").textContent = computeOverallEndLocal();
-
-  frozenLayout=null;
-  renderTasks();
-}
-
-function renderTasks(){
-  if(isTyping) return;
-
-  const sim = computeSimulatedTimes();
-  const tb=$("#tbody");
-  tb.innerHTML="";
+  let startSimHour = +$("#simStart").value;
+  let simStart = new Date();
+  simStart.setHours(startSimHour,0,0,0);
 
   tasks.forEach((t,i)=>{
-    const row=document.createElement("tr");
-    row.id="row-"+t.id;
-    row.className=t.status;
-
-    const realStart="-";
-    const realEnd="-";
-
-    const simStart = sim[t.id].start;
-    const simEnd   = sim[t.id].end;
-
-    row.innerHTML=`
+    let tr=document.createElement("tr");
+    tr.innerHTML = `
       <td>${i+1}</td>
-      <td class="work-col"><input type="checkbox" class="work-flag" ${t.is_work?"checked":""}></td>
-
+      <td><input value="${t.name}" onchange="tasks[${i}].name=this.value; save();"/></td>
+      <td>${fmt(t.remaining)}</td>
+      <td>${t.start||"-"}</td>
+      <td>${t.end||"-"}</td>
+      <td>${t.status}</td>
       <td>
-        <input class="edit-name" type="text" value="${t.name.replace(/"/g,'&quot;')}">
+        <input id="uh${i}" type="number" min="0" style="width:40px"> :
+        <input id="um${i}" type="number" min="0" style="width:40px"> :
+        <input id="us${i}" type="number" min="0" style="width:40px">
+        <button onclick="updateTask(${i})">עדכן</button>
       </td>
-
       <td>
-        <span class="remain" data-id="${t.id}">${fmt(t.remaining)}</span>
-        ${simVisible ? `<span class="sim-line">(סימולציה: ${fmt(t.remaining)})</span>` : ""}
+        <input id="eh${i}" type="number" min="0" style="width:40px"> :
+        <input id="em${i}" type="number" min="0" style="width:40px"> :
+        <input id="es${i}" type="number" min="0" style="width:40px">
+        <button onclick="extendTask(${i})">הארך</button>
       </td>
-
       <td>
-        ${realStart}
-        ${simVisible ? `<span class="sim-line">→ ${simStart}</span>` : ""}
-      </td>
-
-      <td>
-        ${realEnd}
-        ${simVisible ? `<span class="sim-line">→ ${simEnd}</span>` : ""}
-      </td>
-
-      <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
-
-      <td>
-        <div class="edit-grid">
-          <input class="edit-h" type="number" min="0" value="${Math.floor(t.duration/3600)}">:
-          <input class="edit-m" type="number" min="0" value="${Math.floor((t.duration%3600)/60)}">:
-          <input class="edit-s" type="number" min="0" value="${t.duration%60}">
-          <button onclick="updateTask(${t.id})">עדכן</button>
-        </div>
-      </td>
-
-      <td>
-        <div class="extend-grid">
-          <input class="ext-h" type="number" min="0" value="0">:
-          <input class="ext-m" type="number" min="0" value="0">:
-          <input class="ext-s" type="number" min="0" value="0">
-          <button onclick="extendTask(${t.id})">הארך</button>
-        </div>
-      </td>
-
-      <td>
-        <div class="move-grid">
-          <input class="move-to" type="number" min="1" value="${i+1}">
-          <button onclick="moveTask(${t.id})">העבר</button>
-        </div>
-      </td>
-
-      <td class="row-actions">
-        <button onclick="action('/start/${t.id}')">▶</button>
-        <button onclick="action('/pause/${t.id}')">⏸</button>
-        <button onclick="action('/reset/${t.id}')">🔄</button>
-        <button onclick="action('/set_pending/${t.id}')">Pending</button>
-        <button onclick="action('/skip/${t.id}')">דלג</button>
-        <button onclick="action('/done/${t.id}')">Done</button>
-        <button onclick="action('/delete/${t.id}')">🗑</button>
+        <button onclick="setStatus(${i},'running')">▶️</button>
+        <button onclick="setStatus(${i},'paused')">⏸️</button>
+        <button onclick="setStatus(${i},'done')">✔️</button>
+        <button onclick="resetTask(${i})">איפוס</button>
+        <button onclick="moveTask(${i})">העבר</button>
+        <button onclick="del(${i})">🗑️</button>
       </td>
     `;
+    tbody.appendChild(tr);
 
-    tb.appendChild(row);
+    if (showSimulation){
+      let sim = simulateTask(t, simStart);
+      simStart = new Date(simStart.getTime() + t.remaining*1000);
 
-    row.querySelector(".work-flag").onchange = async e=>{
-      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
-      t.is_work=e.target.checked;
-      await syncState(true);
-    };
-
-    row.querySelectorAll("input").forEach(inp=>{
-      inp.addEventListener("focusin",()=>isTyping=true);
-      inp.addEventListener("focusout",()=>isTyping=false);
-    });
+      let simRow=document.createElement("tr");
+      simRow.style.background="#f8f8f8";
+      simRow.innerHTML = `
+        <td colspan="9" style="text-align:center;color:#555;">
+          🟦 סימולציה — התחלה: ${sim.start} | סיום: ${sim.end}
+        </td>
+      `;
+      tbody.appendChild(simRow);
+    }
   });
+
+  recalcOverallEnd();
 }
 
-async function action(url){
-  await api(url,"POST");
-  await syncState(true);
-}
-
-async function updateTask(id){
-  const r=$("#row-"+id);
-  const nm=r.querySelector(".edit-name").value;
-  const h=parseInt(r.querySelector(".edit-h").value)||0;
-  const m=parseInt(r.querySelector(".edit-m").value)||0;
-  const s=parseInt(r.querySelector(".edit-s").value)||0;
-  await api(`/update/${id}`,"POST",{name:nm,hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-
-async function extendTask(id){
-  const r=$("#row-"+id);
-  const h=parseInt(r.querySelector(".ext-h").value)||0;
-  const m=parseInt(r.querySelector(".ext-m").value)||0;
-  const s=parseInt(r.querySelector(".ext-s").value)||0;
-  await api(`/extend/${id}`,"POST",{hours:h,minutes:m,seconds:s});
-  await syncState(true);
-}
-
-async function moveTask(id){
-  const r=$("#row-"+id);
-  const newPos=parseInt(r.querySelector(".move-to").value)||1;
-  await api("/reorder_single","POST",{task_id:id,new_position:newPos});
-  await syncState(true);
-}
-
-$("#btnAdd").onclick=async()=>{
-  const n=$("#newName").value.trim()||"משימה חדשה";
-  const h=parseInt($("#newH").value)||0;
-  const m=parseInt($("#newM").value)||0;
-  const s=parseInt($("#newS").value)||0;
-  const pos=parseInt($("#newPos").value)||1;
-
-  await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s,position:pos});
-  $("#newName").value="";
-  $("#newH").value=0;
-  $("#newM").value=0;
-  $("#newS").value=0;
-  $("#newPos").value=1;
-
-  await syncState(true);
+$("#toggleSim").onclick = ()=>{
+  showSimulation = !showSimulation;
+  $("#toggleSim").textContent = showSimulation ? "הסתר סימולציה" : "הצג סימולציה";
+  render();
 };
 
-$("#btnSimToggle").onclick=()=>{
-  simVisible=!simVisible;
-  $("#btnSimToggle").textContent = simVisible ? "הסתר סימולציה" : "הצג סימולציה";
-  renderTasks();
-};
-
-$("#btnExport").onclick = async ()=>{
-  const res = await fetch("/export");
-  const blob = await res.blob();
-  const url = URL.createObjectURL(blob);
-  const a=document.createElement("a");
-  a.href=url;
-  a.download="tasks_export.json";
-  a.click();
-  URL.revokeObjectURL(url);
-};
-
-$("#fileImport").onchange=async ev=>{
-  const f=ev.target.files[0];
-  if(!f) return;
-  const txt=await f.text();
-  try{
-    const j=JSON.parse(txt);
-    await api("/import","POST",j);
-    await syncState(true);
-  }catch(e){
-    alert("קובץ לא תקין");
-  }
-  ev.target.value="";
-};
+load();
 
 setInterval(()=>{
-  const run=tasks.find(t=>t.status==="running");
-  if(run){
-    run.remaining=Math.max(0,run.remaining-1);
-    if(run.remaining===0) run.status="done";
+  let r = tasks.find(t=>t.status==="running");
+  if (r){
+    r.remaining--;
+    if (r.remaining<=0){
+      r.status="done";
+      r.remaining=0;
+      save();
+      render();
+      return;
+    }
+    save();
+    render();
   }
-
-  document.querySelectorAll(".remain").forEach(s=>{
-    const t=tasks.find(x=>x.id==s.dataset.id);
-    if(t) s.textContent = fmt(t.remaining);
-  });
-
-  $("#now").textContent=new Date().toLocaleTimeString("he-IL",{hour12:false});
-  $("#overallEnd").textContent=computeOverallEndLocal();
 },1000);
-
-setInterval(()=>syncState(false),2500);
-syncState(true);
-</script>
-
-</body>
-</html>
