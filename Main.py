@@ -70,8 +70,10 @@ class Task(Base):
 
     status = Column(String, nullable=False)
 
-    start_time = Column(DateTime(timezone=True))     # ← חדש: שעת התחלה אמיתית
-    end_time = Column(DateTime(timezone=True))       # ← שעת סיום אמיתית קיימת
+    # ⭐⭐ נוספה שעת התחלה אמיתית ⭐⭐
+    start_time = Column(DateTime(timezone=True), nullable=True)
+
+    end_time = Column(DateTime(timezone=True))   # כמו שהיה
 
     position = Column(Integer, nullable=False, default=0)
 
@@ -81,7 +83,7 @@ class Task(Base):
         r = self.remaining
         now_ts = now()
 
-        # חישוב זמן ריצה בזמן אמת
+        # משימה רצה? לחשב בזמן אמת
         if self.status == "running" and self.end_time:
             if self.end_time.tzinfo is None:
                 self.end_time = TZ.localize(self.end_time)
@@ -96,7 +98,7 @@ class Task(Base):
             "position": self.position,
             "is_work": self.is_work,
 
-            # תצוגת זמן התחלה וסיום אמיתית
+            # ⭐⭐ החזרת שעת ההתחלה והסיום האמיתית ⭐⭐
             "real_start": self.start_time.astimezone(TZ).strftime("%H:%M:%S")
                 if self.start_time else "-",
 
@@ -126,17 +128,16 @@ def recompute_chain():
                 rem = int((t.end_time - now_ts).total_seconds())
 
                 if rem <= 0:
-                    # המשימה הסתיימה
                     t.status = "done"
                     t.remaining = 0
                     t.end_time = None
                     s.add(t)
 
-                    # הפעל משימה הבאה pending
+                    # הפעל הבאה
                     for nxt in tasks[i+1:]:
                         if nxt.status == "pending":
                             nxt.status = "running"
-                            nxt.start_time = now_ts                # ← התחלת אמת
+                            nxt.start_time = now_ts
                             nxt.end_time = now_ts + timedelta(seconds=nxt.remaining)
                             s.add(nxt)
                             break
@@ -180,7 +181,7 @@ def state():
 
 
 # ==========================================
-# ➕ יצירת משימה
+# ➕ משימה חדשה
 # ==========================================
 
 @app.route("/add", methods=["POST"])
@@ -197,8 +198,10 @@ def add():
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
 
-        if pos < 0: pos = 0
-        if pos > len(tasks): pos = len(tasks)
+        if pos < 0:
+            pos = 0
+        if pos > len(tasks):
+            pos = len(tasks)
 
         for t in tasks:
             if t.position >= pos:
@@ -227,7 +230,7 @@ def start(tid):
         t = s.get(Task, tid)
         if t:
             t.status = "running"
-            t.start_time = now()                         # ← התחלת אמת
+            t.start_time = now()     # ⭐⭐ שמירת שעת התחלה אמיתית ⭐⭐
             t.end_time = now() + timedelta(seconds=t.remaining)
             s.add(t)
     return jsonify({"ok": True})
@@ -260,9 +263,9 @@ def reset(tid):
         t = s.get(Task, tid)
         if t:
             t.remaining = t.duration
+            t.start_time = None
             t.end_time = None
-            t.start_time = None           # ← איפוס התחלה
-            t.status = "paused"
+            t.status = "pending"
             s.add(t)
     return jsonify({"ok": True})
 
