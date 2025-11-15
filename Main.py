@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from flask import Flask, jsonify, render_template, request, make_response
-from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine
+from sqlalchemy import Column, DateTime, Integer, String, Boolean, create_engine, text
 from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 
 # ====================================================
@@ -13,6 +13,7 @@ from sqlalchemy.orm import declarative_base, scoped_session, sessionmaker
 # ====================================================
 TZ = pytz.timezone("Asia/Jerusalem")
 
+# 🔥 כאן אתה שם את ה־DATABASE_URL שלך
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://matan_nb_user:Qzcukb3uonnqU3wgDxKyzkxeEaT83PJp@dpg-d40u1m7gi27c73d0oorg-a:5432/matan_nb"
@@ -21,7 +22,6 @@ DATABASE_URL = os.getenv(
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False))
 Base = declarative_base()
-
 
 @contextmanager
 def session_scope():
@@ -35,10 +35,8 @@ def session_scope():
     finally:
         s.close()
 
-
 def now():
     return datetime.now(TZ)
-
 
 def hhmmss(total_seconds):
     total_seconds = max(0, int(total_seconds or 0))
@@ -46,7 +44,6 @@ def hhmmss(total_seconds):
     m = (total_seconds % 3600) // 60
     s = total_seconds % 60
     return f"{h:02d}:{m:02d}:{s:02d}"
-
 
 # ====================================================
 # מודל המשימה
@@ -58,13 +55,13 @@ class Task(Base):
     name = Column(String, nullable=False)
     duration = Column(Integer, nullable=False)
     remaining = Column(Integer, nullable=False)
-    status = Column(String, nullable=False)
+    status = Column(String, nullable=False)  # pending / running / paused / done
     end_time = Column(DateTime(timezone=True))
     position = Column(Integer, nullable=False, default=0)
     is_work = Column(Boolean, nullable=False, default=False)
 
     def to_dict(self):
-        """המרת משימה למילון עבור ה-frontend"""
+        “”“המרת משימה למילון עבור ה-frontend”“”
         rem = self.remaining
         now_ts = now()
 
@@ -73,6 +70,7 @@ class Task(Base):
                 self.end_time = TZ.localize(self.end_time)
             rem = max(0, int((self.end_time - now_ts).total_seconds()))
 
+        # זמן סיום אמיתי
         end_str = "-"
         if self.end_time:
             try:
@@ -91,20 +89,21 @@ class Task(Base):
             "is_work": self.is_work
         }
 
-
 Base.metadata.create_all(engine)
 
-
 # ====================================================
-# ניהול שרשרת משימות
+# פונקציות ניהול שרשרת משימות
 # ====================================================
 def recompute_chain():
+    """מעדכן משימה רצה + מפעיל pending הבא אם צריך"""
     with session_scope() as s:
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         now_ts = now()
+
         running_found = False
 
         for i, t in enumerate(tasks):
+
             if t.status == "running":
                 running_found = True
 
@@ -114,12 +113,13 @@ def recompute_chain():
 
                     rem = (t.end_time - now_ts).total_seconds()
 
-                    if rem <= 0:
+                    if rem <= 0:  # נגמר הזמן
                         t.status = "done"
                         t.remaining = 0
                         t.end_time = None
                         s.add(t)
 
+                        # הפעל הבאה
                         if i + 1 < len(tasks):
                             nxt = tasks[i + 1]
                             if nxt.status == "pending":
@@ -130,8 +130,9 @@ def recompute_chain():
                         t.remaining = int(rem)
                         s.add(t)
 
+        # אין running? → ננסה למצוא pending להתחיל (לא אוטומטי אם המשתמש לא רוצה)
         if not running_found:
-            pass
+            pass  # לא מפעילים אוטומטית כדי שלא תתחיל ריצה בלי שהמשתמש ביקש
 
 
 def work_total_seconds():
@@ -141,15 +142,13 @@ def work_total_seconds():
 
 
 # ====================================================
-# Flask App
+# ROUTES
 # ====================================================
 app = Flask(__name__)
-
 
 @app.route("/")
 def index():
     return render_template("index.html")
-
 
 @app.route("/state")
 def state():
@@ -167,7 +166,6 @@ def state():
         "now": now().strftime("%H:%M:%S %d.%m.%Y")
     })
 
-
 @app.route("/add", methods=["POST"])
 def add():
     data = request.json or {}
@@ -184,6 +182,7 @@ def add():
         count = s.query(Task).count()
         pos = max(0, min(pos, count))
 
+        # דחיפת משימות לפי המיקום
         tasks = s.query(Task).order_by(Task.position.asc()).all()
         for t in tasks:
             if t.position >= pos:
@@ -227,6 +226,7 @@ def pause(tid):
 
 @app.route("/reset/<int:tid>", methods=["POST"])
 def reset(tid):
+    """מאפס זמן משימה בלבד"""
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
@@ -240,6 +240,7 @@ def reset(tid):
 
 @app.route("/done/<int:tid>", methods=["POST"])
 def done(tid):
+    """מסמן כ-done בלבד — לא מפעיל משימה הבאה"""
     with session_scope() as s:
         t = s.get(Task, tid)
         if t:
@@ -267,7 +268,6 @@ def workflag(tid):
 @app.route("/update/<int:tid>", methods=["POST"])
 def update(tid):
     data = request.json or {}
-
     with session_scope() as s:
         t = s.get(Task, tid)
         if not t:
@@ -326,6 +326,7 @@ def reorder_single():
             return jsonify({"ok": False})
 
         old = ids.index(tid)
+
         ids.insert(new_pos, ids.pop(old))
 
         for i, idd in enumerate(ids):
