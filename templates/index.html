@@ -143,6 +143,7 @@ async function api(url, method="GET", body=null){
     return await res.json();
   } catch { return null; }
 }
+
 // ---- חישובי זמנים ----
 function computeOverallEndLocal(){
   const nowMs = Date.now();
@@ -259,7 +260,6 @@ function renderTasks(){
       <td>${startStr}</td>
       <td>${endStr}</td>
       <td><span class="${badgeClass(t.status)}">${t.status}</span></td>
-
       <td>
         <div class="edit-grid">
           <input class="edit-h" type="number" value="${Math.floor(t.duration/3600)}" ${t.status==="running"?"disabled":""}>:
@@ -268,7 +268,6 @@ function renderTasks(){
           <button onclick="updateTask(${t.id})" ${t.status==="running"?"disabled":""}>עדכן</button>
         </div>
       </td>
-
       <td>
         <div class="extend-grid">
           <input class="ext-h" type="number" value="0">:
@@ -277,14 +276,12 @@ function renderTasks(){
           <button onclick="extendTask(${t.id})">הארך</button>
         </div>
       </td>
-
       <td>
         <div class="move-grid">
           <input class="move-to" type="number" value="${i+1}">
           <button onclick="moveTask(${t.id})">העבר</button>
         </div>
       </td>
-
       <td class="row-actions">
         <button onclick="action('/start/${t.id}')">התחל</button>
         <button onclick="action('/pause/${t.id}')">השהה</button>
@@ -293,8 +290,8 @@ function renderTasks(){
         <button onclick="action('/skip/${t.id}')">דלג</button>
         <button onclick="action('/done/${t.id}')">Done</button>
 
-        <!-- NEW BUTTON: Reset + Pending -->
-        <button onclick="dualResetPending(${t.id})" style="background:#ffe7a8">איפוס+Pending</button>
+        <!-- הכפתור החדש -->
+        <button onclick="dualResetPending(${t.id})">איפוס+Pending</button>
 
         <button onclick="action('/delete/${t.id}')">מחק</button>
       </td>
@@ -302,7 +299,6 @@ function renderTasks(){
 
     tb.appendChild(tr);
 
-    // סימולציה — שורה נוספת
     if(showSimulation){
       const sim = simLayout.find(x=>x.id===t.id);
       const simTr = document.createElement("tr");
@@ -316,7 +312,19 @@ function renderTasks(){
       `;
       tb.appendChild(simTr);
     }
+
+    tr.querySelectorAll("input").forEach(inp=>{
+      inp.addEventListener("focusin", ()=> isTyping = true);
+      inp.addEventListener("focusout", ()=> { isTyping = false; syncState(true); });
+    });
+
+    tr.querySelector(".work-flag").onchange = async e=>{
+      await api(`/workflag/${t.id}`,"POST",{is_work:e.target.checked});
+      await syncState(true);
+    };
   });
+
+  $("#simStartTime").value = simUserValue;
 }
 
 // ---- פעולות ----
@@ -327,7 +335,7 @@ async function action(url){
   await syncState(true);
 }
 
-// ---- הכפתור החדש ----
+// הכפתור החדש: איפוס + Pending
 async function dualResetPending(id){
   blockSync = true;
   await api(`/reset/${id}`,"POST");
@@ -342,6 +350,7 @@ async function updateTask(id){
   const h = parseInt(row.querySelector(".edit-h").value)||0;
   const m = parseInt(row.querySelector(".edit-m").value)||0;
   const s = parseInt(row.querySelector(".edit-s").value)||0;
+
   await api(`/update/${id}`,"POST",{name:nm, hours:h, minutes:m, seconds:s});
   await syncState(true);
 }
@@ -351,6 +360,7 @@ async function extendTask(id){
   const h=parseInt(row.querySelector(".ext-h").value)||0;
   const m=parseInt(row.querySelector(".ext-m").value)||0;
   const s=parseInt(row.querySelector(".ext-s").value)||0;
+
   await api(`/extend/${id}`,"POST",{hours:h, minutes:m, seconds:s});
   await syncState(true);
 }
@@ -368,15 +378,17 @@ $("#btnAdd").onclick = async ()=>{
   const m=parseInt($("#newM").value)||0;
   const s=parseInt($("#newS").value)||0;
   const pos=parseInt($("#newPos").value)||1;
+
   await api("/add","POST",{name:n,hours:h,minutes:m,seconds:s,insert_position:pos});
+
   $("#newName").value="";
   $("#newH").value=0;
   $("#newM").value=0;
   $("#newS").value=0;
+
   await syncState(true);
 };
 
-// כל המשימות ל־pending
 $("#btnAllPending").onclick = async ()=>{
   await api("/set_all_pending","POST");
   await syncState(true);
@@ -398,28 +410,31 @@ $("#btnExport").onclick = async ()=>{
   const res = await fetch("/export");
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);
+
   const a = document.createElement("a");
   a.href = url;
   a.download = "tasks_export.json";
   a.click();
+
   URL.revokeObjectURL(url);
 };
 
 $("#fileImport").addEventListener("change", async (ev)=>{
   const file = ev.target.files[0];
   if(!file) return;
+
   const txt = await file.text();
   try{
     const json = JSON.parse(txt);
-    await api("/import","POST",json);
+    await api("/import", "POST", json);
     await syncState(true);
   }catch{
-    alert("קובץ לא תקין");
+    alert("קובץ ייבוא לא תקין.");
   }
   ev.target.value = "";
 });
 
-// שעון
+// שעונים
 setInterval(()=>{
   $("#now").textContent = new Date().toLocaleTimeString("he-IL",{hour12:false});
   $("#overallEnd").textContent = computeOverallEndLocal();
@@ -431,6 +446,7 @@ setInterval(()=>{
   }
 },2500);
 
+// טעינה ראשונית
 syncState(true);
 </script>
 </body>
