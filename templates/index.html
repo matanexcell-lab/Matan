@@ -34,6 +34,12 @@
     #overrun.over  { background:#ffd6d6; color:#b00020; }
     #overrun.ahead { background:#d9ffd9; color:#1b7a2b; }
     #overrun.ontime{ background:#eef; color:#334; }
+
+    /* 🆕 זמנים מהירים + הפסקה */
+    .presets { margin-inline-start:8px; }
+    .preset { border:1px solid #bbb; background:#fff; border-radius:6px; padding:2px 8px; }
+    .preset.active { background:#3498db; color:#fff; border-color:#3498db; }
+    .break-box { background:#eaf4ff; border:1px solid #b9d8f5; border-radius:8px; padding:4px 10px; }
   </style>
 </head>
 <body>
@@ -57,6 +63,18 @@
     <input id="newS" type="number" min="0" value="0"> שניות
     <input id="newPos" type="number" min="1" value="1" style="width:60px" title="מיקום משימה חדשה">
     <button id="btnAdd">➕ הוסף</button>
+    <span class="presets">
+      זמן מהיר:
+      <button type="button" class="preset" data-min="10">10 דק'</button>
+      <button type="button" class="preset" data-min="15">15 דק'</button>
+      <button type="button" class="preset" data-min="30">30 דק'</button>
+    </span>
+  </span>
+
+  <span class="break-box">
+    ☕ הפסקה (15 דק') במיקום:
+    <input id="breakPos" type="number" min="1" style="width:60px" placeholder="סוף" title="ריק = בסוף הרשימה">
+    <button id="btnAddBreak">הוסף הפסקה</button>
   </span>
 
   <span>
@@ -423,7 +441,32 @@ $("#btnAdd").onclick = async ()=>{
   $("#newH").value=0;
   $("#newM").value=0;
   $("#newS").value=0;
+  document.querySelectorAll(".preset").forEach(b=>b.classList.remove("active"));
 
+  await syncState(true);
+};
+
+// 🆕 זמנים מהירים – ממלא את שדות הזמן (אפשר עדיין לשנות ידנית)
+document.querySelectorAll(".preset").forEach(btn=>{
+  btn.onclick = ()=>{
+    $("#newH").value = 0;
+    $("#newM").value = btn.dataset.min;
+    $("#newS").value = 0;
+    document.querySelectorAll(".preset").forEach(b=>b.classList.toggle("active", b===btn));
+  };
+});
+["#newH","#newM","#newS"].forEach(sel=>{
+  $(sel).addEventListener("input", ()=>
+    document.querySelectorAll(".preset").forEach(b=>b.classList.remove("active")));
+});
+
+// 🆕 הפסקה מובנית – 15 דקות, רק בוחרים מיקום (ריק = בסוף)
+$("#btnAddBreak").onclick = async ()=>{
+  const raw = $("#breakPos").value.trim();
+  const pos = raw === "" ? tasks.length + 1 : (parseInt(raw) || tasks.length + 1);
+
+  await api("/add","POST",{name:"הפסקה",hours:0,minutes:15,seconds:0,insert_position:pos});
+  $("#breakPos").value = "";
   await syncState(true);
 };
 
