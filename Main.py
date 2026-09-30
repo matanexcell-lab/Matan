@@ -18,6 +18,13 @@ DATABASE_URL = os.getenv(
     "postgresql://matan_nb_user:Qzcukb3uonnqU3wgDxKyzkxeEaT83PJp@dpg-d40u1m7gi27c73d0oorg-a:5432/matan_nb"
 )
 
+# SQLAlchemy 2.1 עבר לדרייבר psycopg (גרסה 3) כברירת מחדל.
+# מכריחים את psycopg2 שכבר מותקן אצלך
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = "postgresql://" + DATABASE_URL[len("postgres://"):]
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = "postgresql+psycopg2://" + DATABASE_URL[len("postgresql://"):]
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)
 Session = scoped_session(
     sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
