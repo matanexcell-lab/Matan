@@ -127,11 +127,14 @@ def set_meta_dt(s, key, dt):
     if dt is None:
         if m:
             s.delete(m)
+            s.flush()
         return
     if m:
         m.value = dt.isoformat()
     else:
         s.add(Meta(key=key, value=dt.isoformat()))
+    # שומר מיד, כדי שקריאה נוספת באותה פעולה תמצא את השורה ולא תנסה ליצור אותה שוב
+    s.flush()
 
 
 def clear_plan(s):
