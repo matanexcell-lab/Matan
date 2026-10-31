@@ -152,22 +152,35 @@ def get_meta_int(s, key):
         return 0
 
 
-# ---- 🆕 טיימר חריגה ----
-def overrun_stop(s, resume):
+# ---- 🆕 זמן ספייר ----
+# spare_budget = כמה ספייר הגדרת (שניות)
+# spare_used   = כמה ספייר כבר נוצל (שניות)
+# spare_start  = מתי הופעל הספייר (אם הוא פועל עכשיו)
+def spare_elapsed_live(s, now_ts):
+    started = get_meta_dt(s, "spare_start")
+    return max(0, int((now_ts - started).total_seconds())) if started else 0
+
+
+def spare_remaining(s, now_ts):
+    budget = get_meta_int(s, "spare_budget")
+    used = get_meta_int(s, "spare_used") + spare_elapsed_live(s, now_ts)
+    return max(0, budget - used)
+
+
+def spare_stop(s, resume):
     """
-    עוצר את טיימר החריגה (אם פועל) ומוסיף את הזמן לסה"כ.
-    resume=True → ממשיך את המשימה שהושהתה כשהחריגה התחילה.
+    עוצר את הספייר (אם פועל) ורושם כמה נוצל.
+    resume=True → ממשיך את המשימה שהושהתה כשהספייר הופעל.
     """
-    started = get_meta_dt(s, "overrun_start")
+    started = get_meta_dt(s, "spare_start")
     if not started:
         return
     now_ts = now()
-    elapsed = max(0, int((now_ts - started).total_seconds()))
-    set_meta(s, "overrun_total", get_meta_int(s, "overrun_total") + elapsed)
-    set_meta(s, "overrun_start", None)
+    set_meta(s, "spare_used", get_meta_int(s, "spare_used") + spare_elapsed_live(s, now_ts))
+    set_meta(s, "spare_start", None)
 
-    tid = get_meta_int(s, "overrun_task_id")
-    set_meta(s, "overrun_task_id", None)
+    tid = get_meta_int(s, "spare_task_id")
+    set_meta(s, "spare_task_id", None)
     if resume and tid:
         running = s.query(Task).filter(Task.status == "running").first()
         t = s.get(Task, tid)
@@ -176,8 +189,9 @@ def overrun_stop(s, resume):
             t.end_time = now_ts + timedelta(seconds=t.remaining)
 
 
-def clear_overrun(s):
-    for k in ("overrun_start", "overrun_task_id", "overrun_total"):
+def refill_spare(s):
+    """סשן חדש: הספייר חוזר להיות מלא (ההגדרה נשמרת)."""
+    for k in ("spare_start", "spare_task_id", "spare_used"):
         set_meta(s, k, None)
 
 
@@ -250,21 +264,24 @@ def state():
         any_running = any(t.status == "running" for t in tasks)
         any_active = any(t.status in ACTIVE for t in tasks)
 
-        if any_active:
-            projected = now_ts + timedelta(seconds=total_active_remaining(tasks, now_ts))
-            # כשאין משימה רצה (השהיה) – שעת הסיום הצפויה זזה עם השעון
+        spare_left = spare_remaining(s, now_ts)
+        spare_start = get_meta_dt(s, "spare_start")
+
+        if any_active or spare_start:
+            # הספייר שנשאר נכלל בשעת הסיום
+            projected = now_ts + timedelta(seconds=total_active_remaining(tasks, now_ts) + spare_left)
+            # כשאין משימה רצה (השהיה / ספייר פעיל) – החישוב מתעדכן עם השעון
             projected_live = not any_running
         else:
             projected = get_meta_dt(s, "last_done_at")
             projected_live = False
 
-        # 🆕 טיימר חריגה
-        overrun_start = get_meta_dt(s, "overrun_start")
-        overrun_total = get_meta_int(s, "overrun_total")
-        if overrun_start and not any_active:
-            # כל המשימות הסתיימו אבל החריגה עדיין רצה → הסיום הוא "עכשיו"
-            projected = now_ts
-            projected_live = True
+        spare = {
+            "spare_budget_seconds": get_meta_int(s, "spare_budget"),
+            "spare_used_seconds": get_meta_int(s, "spare_used"),
+            "spare_active": spare_start is not None,
+            "spare_start_ms": to_ms(spare_start),
+        }
 
     ws = work_total_seconds()
     return jsonify({
@@ -277,33 +294,58 @@ def state():
         "planned_end_ms": to_ms(planned),
         "projected_end_ms": to_ms(projected),
         "projected_is_live": projected_live,
-        "overrun_active": overrun_start is not None,
-        "overrun_start_ms": to_ms(overrun_start),
-        "overrun_total_seconds": overrun_total,
+        **spare,
     })
 
 
-# 🆕 התחלת טיימר חריגה: משהה את המשימה הרצה ומתחיל לספור
-@app.route("/overrun/start", methods=["POST"])
-def overrun_start_route():
+# 🆕 הגדרת זמן ספייר (בדקות)
+@app.route("/spare/set", methods=["POST"])
+def spare_set():
+    data = request.json or {}
+    try:
+        new_budget = max(0, int(float(data.get("minutes", 0)) * 60))
+    except Exception:
+        return jsonify({"ok": False, "error": "invalid minutes"}), 400
     with session_scope() as s:
-        if get_meta_dt(s, "overrun_start"):
+        old_budget = get_meta_int(s, "spare_budget")
+        set_meta(s, "spare_budget", new_budget)
+        # שינוי הספייר הוא תכנון, לא חריגה → מזיז את היעד
+        planned = get_meta_dt(s, "planned_end")
+        if planned:
+            set_meta_dt(s, "planned_end", planned + timedelta(seconds=new_budget - old_budget))
+    return jsonify({"ok": True})
+
+
+# 🆕 הפעלת ספייר: משהה את המשימה הרצה, הספייר מתחיל לרדת
+@app.route("/spare/start", methods=["POST"])
+def spare_start_route():
+    with session_scope() as s:
+        if get_meta_dt(s, "spare_start"):
             return jsonify({"ok": True})
         t = s.query(Task).filter(Task.status == "running").first()
         if t:
             t.remaining = t.live_remaining()
             t.end_time = None
             t.status = "paused"
-            set_meta(s, "overrun_task_id", t.id)
-        set_meta_dt(s, "overrun_start", now())
+            set_meta(s, "spare_task_id", t.id)
+        set_meta_dt(s, "spare_start", now())
     return jsonify({"ok": True})
 
 
-# 🆕 סיום טיימר חריגה: מוסיף לסה"כ וממשיך את המשימה שהושהתה
-@app.route("/overrun/stop", methods=["POST"])
-def overrun_stop_route():
+# 🆕 עצירת ספייר: שומר כמה נוצל וממשיך את המשימה
+@app.route("/spare/stop", methods=["POST"])
+def spare_stop_route():
     with session_scope() as s:
-        overrun_stop(s, resume=True)
+        spare_stop(s, resume=True)
+    return jsonify({"ok": True})
+
+
+# 🆕 מילוי הספייר מחדש (בלי לשנות את היעד)
+@app.route("/spare/refill", methods=["POST"])
+def spare_refill_route():
+    with session_scope() as s:
+        spare_stop(s, resume=True)
+        set_meta(s, "spare_used", None)
     return jsonify({"ok": True})
 
 
@@ -355,7 +397,7 @@ def start(tid):
         t = s.get(Task, tid)
         if t and t.status in ("pending", "paused"):
             # 🆕 לחיצה על "התחל" בזמן חריגה – סוגרת את החריגה
-            overrun_stop(s, resume=False)
+            spare_stop(s, resume=False)
             now_ts = now()
             t.status = "running"
             t.end_time = now_ts + timedelta(seconds=t.remaining)
@@ -363,7 +405,7 @@ def start(tid):
             # 🆕 הלחיצה הראשונה על "התחל" קובעת את שעת הסיום המתוכננת
             if get_meta_dt(s, "planned_end") is None:
                 tasks = s.query(Task).all()
-                total = total_active_remaining(tasks, now_ts)
+                total = total_active_remaining(tasks, now_ts) + spare_remaining(s, now_ts)
                 set_meta_dt(s, "planned_end", now_ts + timedelta(seconds=total))
 
     return jsonify({"ok": True})
@@ -555,7 +597,7 @@ def import_tasks():
     with session_scope() as s:
         s.query(Task).delete()
         clear_plan(s)
-        clear_overrun(s)
+        refill_spare(s)
         for i, t in enumerate(items):
             duration = int(t.get("duration", 0))
             status = t.get("status", "pending")
@@ -580,7 +622,7 @@ def set_all_pending():
             t.status = "pending"
             t.end_time = None
         clear_plan(s)  # 🆕 סשן חדש → יעד חדש בלחיצה הבאה על "התחל"
-        clear_overrun(s)
+        refill_spare(s)  # והספייר מתמלא מחדש
     return jsonify({"ok": True})
 
 
@@ -594,10 +636,9 @@ def reset_plan():
     with session_scope() as s:
         tasks = s.query(Task).all()
         clear_plan(s)
-        set_meta(s, "overrun_total", None)  # מאפס את סה"כ החריגות
         if any(t.status == "running" for t in tasks):
             now_ts = now()
-            total = total_active_remaining(tasks, now_ts)
+            total = total_active_remaining(tasks, now_ts) + spare_remaining(s, now_ts)
             set_meta_dt(s, "planned_end", now_ts + timedelta(seconds=total))
     return jsonify({"ok": True})
 
