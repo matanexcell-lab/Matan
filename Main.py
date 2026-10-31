@@ -115,26 +115,70 @@ class Meta(Base):
 Base.metadata.create_all(engine)
 
 
-def get_meta_dt(s, key):
+def get_meta(s, key):
     m = s.get(Meta, key)
-    if not m or not m.value:
-        return None
-    return aware(datetime.fromisoformat(m.value))
+    return m.value if m and m.value else None
 
 
-def set_meta_dt(s, key, dt):
+def set_meta(s, key, value):
     m = s.get(Meta, key)
-    if dt is None:
+    if value is None:
         if m:
             s.delete(m)
             s.flush()
         return
     if m:
-        m.value = dt.isoformat()
+        m.value = str(value)
     else:
-        s.add(Meta(key=key, value=dt.isoformat()))
+        s.add(Meta(key=key, value=str(value)))
     # שומר מיד, כדי שקריאה נוספת באותה פעולה תמצא את השורה ולא תנסה ליצור אותה שוב
     s.flush()
+
+
+def get_meta_dt(s, key):
+    v = get_meta(s, key)
+    return aware(datetime.fromisoformat(v)) if v else None
+
+
+def set_meta_dt(s, key, dt):
+    set_meta(s, key, dt.isoformat() if dt else None)
+
+
+def get_meta_int(s, key):
+    v = get_meta(s, key)
+    try:
+        return int(v) if v else 0
+    except ValueError:
+        return 0
+
+
+# ---- 🆕 טיימר חריגה ----
+def overrun_stop(s, resume):
+    """
+    עוצר את טיימר החריגה (אם פועל) ומוסיף את הזמן לסה"כ.
+    resume=True → ממשיך את המשימה שהושהתה כשהחריגה התחילה.
+    """
+    started = get_meta_dt(s, "overrun_start")
+    if not started:
+        return
+    now_ts = now()
+    elapsed = max(0, int((now_ts - started).total_seconds()))
+    set_meta(s, "overrun_total", get_meta_int(s, "overrun_total") + elapsed)
+    set_meta(s, "overrun_start", None)
+
+    tid = get_meta_int(s, "overrun_task_id")
+    set_meta(s, "overrun_task_id", None)
+    if resume and tid:
+        running = s.query(Task).filter(Task.status == "running").first()
+        t = s.get(Task, tid)
+        if t and not running and t.status == "paused":
+            t.status = "running"
+            t.end_time = now_ts + timedelta(seconds=t.remaining)
+
+
+def clear_overrun(s):
+    for k in ("overrun_start", "overrun_task_id", "overrun_total"):
+        set_meta(s, k, None)
 
 
 def clear_plan(s):
@@ -214,6 +258,14 @@ def state():
             projected = get_meta_dt(s, "last_done_at")
             projected_live = False
 
+        # 🆕 טיימר חריגה
+        overrun_start = get_meta_dt(s, "overrun_start")
+        overrun_total = get_meta_int(s, "overrun_total")
+        if overrun_start and not any_active:
+            # כל המשימות הסתיימו אבל החריגה עדיין רצה → הסיום הוא "עכשיו"
+            projected = now_ts
+            projected_live = True
+
     ws = work_total_seconds()
     return jsonify({
         "ok": True,
@@ -225,7 +277,34 @@ def state():
         "planned_end_ms": to_ms(planned),
         "projected_end_ms": to_ms(projected),
         "projected_is_live": projected_live,
+        "overrun_active": overrun_start is not None,
+        "overrun_start_ms": to_ms(overrun_start),
+        "overrun_total_seconds": overrun_total,
     })
+
+
+# 🆕 התחלת טיימר חריגה: משהה את המשימה הרצה ומתחיל לספור
+@app.route("/overrun/start", methods=["POST"])
+def overrun_start_route():
+    with session_scope() as s:
+        if get_meta_dt(s, "overrun_start"):
+            return jsonify({"ok": True})
+        t = s.query(Task).filter(Task.status == "running").first()
+        if t:
+            t.remaining = t.live_remaining()
+            t.end_time = None
+            t.status = "paused"
+            set_meta(s, "overrun_task_id", t.id)
+        set_meta_dt(s, "overrun_start", now())
+    return jsonify({"ok": True})
+
+
+# 🆕 סיום טיימר חריגה: מוסיף לסה"כ וממשיך את המשימה שהושהתה
+@app.route("/overrun/stop", methods=["POST"])
+def overrun_stop_route():
+    with session_scope() as s:
+        overrun_stop(s, resume=True)
+    return jsonify({"ok": True})
 
 
 @app.route("/add", methods=["POST"])
@@ -275,6 +354,8 @@ def start(tid):
 
         t = s.get(Task, tid)
         if t and t.status in ("pending", "paused"):
+            # 🆕 לחיצה על "התחל" בזמן חריגה – סוגרת את החריגה
+            overrun_stop(s, resume=False)
             now_ts = now()
             t.status = "running"
             t.end_time = now_ts + timedelta(seconds=t.remaining)
@@ -474,6 +555,7 @@ def import_tasks():
     with session_scope() as s:
         s.query(Task).delete()
         clear_plan(s)
+        clear_overrun(s)
         for i, t in enumerate(items):
             duration = int(t.get("duration", 0))
             status = t.get("status", "pending")
@@ -498,6 +580,7 @@ def set_all_pending():
             t.status = "pending"
             t.end_time = None
         clear_plan(s)  # 🆕 סשן חדש → יעד חדש בלחיצה הבאה על "התחל"
+        clear_overrun(s)
     return jsonify({"ok": True})
 
 
@@ -511,6 +594,7 @@ def reset_plan():
     with session_scope() as s:
         tasks = s.query(Task).all()
         clear_plan(s)
+        set_meta(s, "overrun_total", None)  # מאפס את סה"כ החריגות
         if any(t.status == "running" for t in tasks):
             now_ts = now()
             total = total_active_remaining(tasks, now_ts)
