@@ -39,7 +39,38 @@
     .presets { margin-inline-start:8px; }
     .preset { border:1px solid #bbb; background:#fff; border-radius:6px; padding:2px 8px; }
     .preset.active { background:#3498db; color:#fff; border-color:#3498db; }
-    .break-box { background:#eaf4ff; border:1px solid #b9d8f5; border-radius:8px; padding:4px 10px; }
+
+    /* 🆕 פריסה: תוכן + פאנל מטלות קבועות בצד */
+    .layout { display:flex; gap:12px; align-items:flex-start; }
+    .main { flex:1; min-width:0; }
+    .side { width:230px; flex-shrink:0; position:sticky; top:10px;
+            background:#eaf4ff; border:1px solid #b9d8f5; border-radius:10px; padding:10px; }
+    .side h3 { margin:0 0 8px; font-size:16px; text-align:center; }
+    .fixed-item { background:#fff; border:1px solid #d3e4f5; border-radius:8px; padding:8px; margin-bottom:8px; }
+    .fixed-item .title { font-weight:bold; }
+    .fixed-item .dur { color:#555; font-size:13px; }
+    .fixed-item .row { display:flex; gap:6px; align-items:center; margin-top:6px; }
+    .fixed-item input { width:60px; }
+    .side .hint { font-size:12px; color:#666; text-align:center; }
+    @media (max-width: 900px) {
+      .layout { flex-direction:column; }
+      .side { width:auto; position:static; }
+    }
+
+    /* 🆕 זמן ספייר */
+    .spare { background:#fff; border:2px solid #9fc5ea; border-radius:10px; padding:10px; margin-bottom:12px; text-align:center; }
+    .spare.active { border-color:#e08a00; background:#fff7e6; }
+    .spare.over   { border-color:#c62828; background:#ffe3e3; }
+    .spare .title { font-weight:bold; font-size:15px; }
+    #spareClock { font-size:26px; font-weight:bold; font-variant-numeric:tabular-nums; margin:4px 0; }
+    .spare.over #spareClock { color:#c62828; }
+    #spareBtn { width:100%; padding:7px; border:none; border-radius:6px; color:#fff; background:#e08a00; font-weight:bold; }
+    .spare.active #spareBtn { background:#2e7d32; }
+    #spareBtn:disabled { background:#bbb; cursor:default; }
+    .spare .row { display:flex; gap:6px; align-items:center; justify-content:center; margin-top:8px; font-size:13px; }
+    .spare .row input { width:55px; }
+    #spareInfo { font-size:12px; color:#555; margin-top:6px; }
+    .linklike { background:none; border:none; color:#1565c0; text-decoration:underline; padding:0; font-size:12px; }
   </style>
 </head>
 <body>
@@ -55,6 +86,25 @@
   <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span>
 </div>
 
+<div class="layout">
+<aside class="side">
+  <div class="spare" id="spareBox">
+    <div class="title">⏳ זמן ספייר</div>
+    <div id="spareClock">00:00:00</div>
+    <button id="spareBtn">▶ הפעל ספייר</button>
+    <div class="row">
+      <input id="spareMin" type="number" min="0" placeholder="דק'"> דקות
+      <button id="spareSave">שמור</button>
+    </div>
+    <div id="spareInfo"></div>
+  </div>
+
+  <h3>📌 מטלות קבועות</h3>
+  <div id="fixedList"></div>
+  <div class="hint">מיקום ריק = בסוף הרשימה</div>
+</aside>
+
+<div class="main">
 <div class="tools">
   <span>
     <input id="newName" type="text" placeholder="שם משימה">
@@ -69,12 +119,6 @@
       <button type="button" class="preset" data-min="15">15 דק'</button>
       <button type="button" class="preset" data-min="30">30 דק'</button>
     </span>
-  </span>
-
-  <span class="break-box">
-    ☕ הפסקה (15 דק') במיקום:
-    <input id="breakPos" type="number" min="1" style="width:60px" placeholder="סוף" title="ריק = בסוף הרשימה">
-    <button id="btnAddBreak">הוסף הפסקה</button>
   </span>
 
   <span>
@@ -114,6 +158,8 @@
   </thead>
   <tbody id="tbody"></tbody>
 </table>
+</div>
+</div>
 
 <script>
 const $ = s => document.querySelector(s);
@@ -178,7 +224,7 @@ async function api(url, method="GET", body=null){
 // ---- 🆕 שעת סיום צפויה + חריגה ----
 function projectedMs(){
   // בהשהיה (אין משימה רצה) – הסיום הצפוי זז קדימה עם כל שנייה
-  if (plan.live) return nowMs() + plan.sumRemaining * 1000;
+  if (plan.live) return nowMs() + (plan.sumRemaining + spareCalc().left) * 1000;
   return plan.projected;
 }
 
@@ -287,6 +333,16 @@ async function syncState(force=false){
       .reduce((a,t) => a + t.remaining, 0)
   };
   updateEndInfo();
+
+  spare = {
+    budget: data.spare_budget_seconds || 0,
+    used: data.spare_used_seconds || 0,
+    active: !!data.spare_active,
+    startMs: data.spare_start_ms
+  };
+  if (document.activeElement !== $("#spareMin"))
+    $("#spareMin").value = spare.budget ? Math.round(spare.budget/60) : "";
+  updateSpare();
 
   if (!tasks.some(t => t.status === "running"))
     frozenLayout = null;
@@ -460,13 +516,84 @@ document.querySelectorAll(".preset").forEach(btn=>{
     document.querySelectorAll(".preset").forEach(b=>b.classList.remove("active")));
 });
 
-// 🆕 הפסקה מובנית – 15 דקות, רק בוחרים מיקום (ריק = בסוף)
-$("#btnAddBreak").onclick = async ()=>{
-  const raw = $("#breakPos").value.trim();
-  const pos = raw === "" ? tasks.length + 1 : (parseInt(raw) || tasks.length + 1);
+// 🆕 מטלות קבועות – זמן קבוע, רק בוחרים מיקום (ריק = בסוף)
+const FIXED_TASKS = [
+  { name: "הפסקה",    icon: "☕", minutes: 15 },
+  { name: "התארגנות", icon: "🧹", minutes: 15 },
+  { name: "אוכל",     icon: "🍽️", minutes: 35 },
+];
 
-  await api("/add","POST",{name:"הפסקה",hours:0,minutes:15,seconds:0,insert_position:pos});
-  $("#breakPos").value = "";
+(function renderFixed(){
+  const box = $("#fixedList");
+  FIXED_TASKS.forEach((f, i)=>{
+    const div = document.createElement("div");
+    div.className = "fixed-item";
+    div.innerHTML = `
+      <div class="title">${f.icon} ${f.name}</div>
+      <div class="dur">${f.minutes} דקות</div>
+      <div class="row">
+        מיקום:
+        <input type="number" min="1" placeholder="סוף" id="fixedPos${i}">
+        <button id="fixedBtn${i}">➕ הוסף</button>
+      </div>`;
+    box.appendChild(div);
+
+    div.querySelector(`#fixedBtn${i}`).onclick = async ()=>{
+      const inp = $(`#fixedPos${i}`);
+      const raw = inp.value.trim();
+      const pos = raw === "" ? tasks.length + 1 : (parseInt(raw) || tasks.length + 1);
+      await api("/add","POST",{name:f.name,hours:0,minutes:f.minutes,seconds:0,insert_position:pos});
+      inp.value = "";
+      await syncState(true);
+    };
+  });
+})();
+
+// 🆕 זמן ספייר
+let spare = { budget:0, used:0, active:false, startMs:null };
+
+function spareCalc(){
+  const live = spare.active && spare.startMs
+    ? Math.max(0, Math.floor((nowMs() - spare.startMs)/1000)) : 0;
+  const usedNow = spare.used + live;
+  return {
+    left: Math.max(0, spare.budget - usedNow),
+    over: Math.max(0, usedNow - spare.budget),
+    usedNow
+  };
+}
+
+function updateSpare(){
+  const c = spareCalc();
+  const box = $("#spareBox");
+  box.classList.toggle("active", spare.active && c.over === 0);
+  box.classList.toggle("over", spare.active && c.over > 0);
+
+  $("#spareClock").textContent = c.over > 0 ? "+" + fmt(c.over) : fmt(c.left);
+  const btn = $("#spareBtn");
+  btn.textContent = spare.active ? "■ עצור ספייר" : "▶ הפעל ספייר";
+  btn.disabled = !spare.active && spare.budget === 0;
+
+  let info = "";
+  if (spare.budget === 0) info = "הגדר כמה דקות ספייר יש לך";
+  else {
+    info = `נוצל ${fmt(c.usedNow)} מתוך ${fmt(spare.budget)}`;
+    if (c.over > 0) info += " – חרגת מהספייר";
+  }
+  $("#spareInfo").innerHTML = info +
+    (spare.used > 0 && !spare.active ? ` · <button class="linklike" id="spareRefill">מלא מחדש</button>` : "");
+  const rf = $("#spareRefill");
+  if (rf) rf.onclick = () => action("/spare/refill");
+}
+
+$("#spareBtn").onclick = async ()=>{
+  await action(spare.active ? "/spare/stop" : "/spare/start");
+};
+
+$("#spareSave").onclick = async ()=>{
+  const m = parseFloat($("#spareMin").value) || 0;
+  await api("/spare/set","POST",{minutes:m});
+  $("#spareSave").blur();
   await syncState(true);
 };
 
@@ -526,6 +653,7 @@ $("#fileImport").addEventListener("change", async (ev)=>{
 setInterval(()=>{
   $("#now").textContent = new Date().toLocaleTimeString("he-IL",{hour12:false});
   updateEndInfo();
+  updateSpare();
 },1000);
 
 setInterval(()=>{
