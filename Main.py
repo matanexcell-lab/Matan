@@ -1,5 +1,8 @@
 import os
 import json
+import threading
+import time
+import traceback
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 import pytz
@@ -252,6 +255,26 @@ def index():
     return render_template("index.html")
 
 
+def current_overrun_seconds(s, now_ts):
+    """
+    כמה אני חורג כרגע (שניות): שעת סיום צפויה פחות שעת סיום מתוכננת.
+    חיובי = חריגה, שלילי = מקדים. None = אין סשן פעיל (לא נקבע יעד).
+    """
+    planned = get_meta_dt(s, "planned_end")
+    if not planned:
+        return None
+    tasks = s.query(Task).all()
+    any_active = any(t.status in ACTIVE for t in tasks)
+    if any_active or get_meta_dt(s, "spare_start"):
+        projected = now_ts + timedelta(seconds=total_active_remaining(tasks, now_ts)
+                                       + spare_remaining(s, now_ts))
+    else:
+        projected = get_meta_dt(s, "last_done_at")
+        if not projected:
+            return None
+    return int((projected - planned).total_seconds())
+
+
 @app.route("/state")
 def state():
     recompute_chain()
@@ -295,6 +318,7 @@ def state():
         "projected_end_ms": to_ms(projected),
         "projected_is_live": projected_live,
         **spare,
+        "sheet_status": SHEET_STATUS,
     })
 
 
@@ -668,6 +692,149 @@ def delete_task(tid):
             o.position -= 1
 
     return jsonify({"ok": True})
+
+# ====================================================
+# 🆕 סנכרון חריגה ל־Google Sheets – פעם בשעה
+# ====================================================
+# משתני סביבה ב־Render:
+#   GOOGLE_CREDENTIALS_JSON = כל התוכן של קובץ ה־JSON של ה־service account
+#   SHEET_ID  (לא חובה)     = מזהה הגיליון
+#   SHEET_GID (לא חובה)     = מזהה הלשונית (gid מהקישור)
+SHEET_ID = os.getenv("SHEET_ID", "1U6hD4elzqIOpVgyP-7eLrDXS6t_xPPhvoILomFuJW5g")
+SHEET_GID = int(os.getenv("SHEET_GID", "9640767"))
+DATE_ROW = 3        # שורת התאריכים
+HOUR_COL = 1        # עמודה A – טווחי השעות
+
+SHEET_STATUS = {"enabled": False, "last_ok": None, "last_error": None}
+_ws_cache = {"ws": None}
+
+
+def _get_worksheet():
+    if _ws_cache["ws"] is not None:
+        return _ws_cache["ws"]
+    import gspread
+    raw = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    if raw:
+        gc = gspread.service_account_from_dict(json.loads(raw))
+    elif os.path.exists("service_account.json"):
+        gc = gspread.service_account(filename="service_account.json")
+    else:
+        return None
+    ws = gc.open_by_key(SHEET_ID).get_worksheet_by_id(SHEET_GID)
+    _ws_cache["ws"] = ws
+    return ws
+
+
+def _norm_date(text):
+    """'26/11/2026' / '26.11.2026' / '2026-11-26' → date, אחרת None"""
+    text = (text or "").strip()
+    for fmt in ("%d/%m/%Y", "%d.%m.%Y", "%d/%m/%y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            pass
+    return None
+
+
+def _find_cell(ws, day, hour):
+    """מוצא את התא: עמודה לפי התאריך בשורה 3, שורה לפי השעה בעמודה A"""
+    col = None
+    for i, v in enumerate(ws.row_values(DATE_ROW), start=1):
+        if _norm_date(v) == day:
+            col = i
+            break
+    row = None
+    prefix = f"{hour:02d}:00"
+    for i, v in enumerate(ws.col_values(HOUR_COL), start=1):
+        v = (v or "").strip()
+        if v.startswith(prefix) or v.startswith(f"{hour}:00"):
+            row = i
+            break
+    return row, col
+
+
+def write_overrun_to_sheet(slot_start, overrun_seconds):
+    """
+    כותב את החריגה (בדקות, שלילי = מקדים) לתא של השעה slot_start.
+    למשל slot_start=09:00 → השורה '09:00-10:00' בעמודת התאריך של היום.
+    """
+    ws = _get_worksheet()
+    if ws is None:
+        SHEET_STATUS["enabled"] = False
+        return False, "לא הוגדר GOOGLE_CREDENTIALS_JSON"
+    SHEET_STATUS["enabled"] = True
+    row, col = _find_cell(ws, slot_start.date(), slot_start.hour)
+    if not col:
+        return False, f"לא נמצא התאריך {slot_start:%d/%m/%Y} בשורה {DATE_ROW}"
+    if not row:
+        return False, f"לא נמצאה השעה {slot_start:%H}:00 בעמודה A"
+    minutes = round(overrun_seconds / 60)
+    ws.update_cell(row, col, minutes)
+    return True, f"{slot_start:%H}:00 → {minutes} דק'"
+
+
+def _sync_slot(slot_start, force=False):
+    """כותב לשעה slot_start (אם עוד לא נכתבה). מחזיר הודעה."""
+    slot_key = slot_start.strftime("%Y-%m-%d %H")
+    with session_scope() as s:
+        if not force and get_meta(s, "sheet_last_slot") == slot_key:
+            return None
+        ov = current_overrun_seconds(s, now())
+        # הסשן הסתיים עוד לפני שהשעה הזו התחילה → אין מה לרשום
+        any_active = s.query(Task).filter(Task.status.in_(ACTIVE)).first() is not None
+        last_done = get_meta_dt(s, "last_done_at")
+        if not any_active and not get_meta_dt(s, "spare_start") and last_done and last_done < slot_start:
+            ov = None
+        if ov is None:
+            set_meta(s, "sheet_last_slot", slot_key)
+            return "אין סשן פעיל – לא נכתב"
+    try:
+        ok, msg = write_overrun_to_sheet(slot_start, ov)
+    except Exception as e:
+        _ws_cache["ws"] = None
+        ok, msg = False, f"{type(e).__name__}: {e}"
+        traceback.print_exc()
+    if ok:
+        with session_scope() as s:
+            set_meta(s, "sheet_last_slot", slot_key)  # רק אחרי הצלחה; אחרת ננסה שוב
+        SHEET_STATUS["last_ok"] = f"{now():%H:%M} · {msg}"
+        SHEET_STATUS["last_error"] = None
+    else:
+        SHEET_STATUS["last_error"] = msg
+        print("[sheet sync]", msg, flush=True)
+    return msg
+
+
+def _sheet_loop():
+    """
+    רץ ברקע. בכל פעם שעוברת שעה עגולה (למשל 10:00) – כותב את החריגה
+    של אותו רגע לשורה של השעה שהסתיימה (09:00-10:00).
+    """
+    while True:
+        try:
+            recompute_chain()
+            n = now()
+            # רק ב־15 הדקות הראשונות של השעה (אם השרת היה למטה – לא כותבים ערך ישן)
+            if n.minute < 15:
+                slot = (n - timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+                _sync_slot(slot)
+        except Exception:
+            traceback.print_exc()
+        time.sleep(30)
+
+
+@app.route("/sheet/sync_now", methods=["POST"])
+def sheet_sync_now():
+    """בדיקה: כותב עכשיו את החריגה הנוכחית לשורה של השעה הנוכחית."""
+    recompute_chain()
+    slot = now().replace(minute=0, second=0, microsecond=0)
+    msg = _sync_slot(slot, force=True)
+    return jsonify({"ok": SHEET_STATUS["last_error"] is None, "message": msg,
+                    "status": SHEET_STATUS})
+
+
+if os.getenv("DISABLE_SHEET_SYNC") != "1":
+    threading.Thread(target=_sheet_loop, daemon=True).start()
 
 
 if __name__ == "__main__":
