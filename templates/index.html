@@ -83,7 +83,9 @@
   <button id="btnResetPlan" title="קובע את שעת הסיום הצפויה כרגע כיעד החדש">קבע יעד מחדש</button><br>
   <b>שעת סיום צפויה:</b> <span id="overallEnd">-</span><br>
   <span id="overrun"></span><br>
-  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span>
+  <b>זמן עבודה כולל:</b> <span id="workTotal">00:00:00</span><br>
+  <span class="muted">📊 גוגל שיטס: <span id="sheetStatus">-</span></span>
+  <button id="btnSheetNow" class="linklike" title="כותב עכשיו את החריגה הנוכחית לשורה של השעה הנוכחית">רשום עכשיו</button>
 </div>
 
 <div class="layout">
@@ -344,6 +346,13 @@ async function syncState(force=false){
     $("#spareMin").value = spare.budget ? Math.round(spare.budget/60) : "";
   updateSpare();
 
+  // 🆕 סטטוס גוגל שיטס
+  const ss = data.sheet_status || {};
+  $("#sheetStatus").textContent =
+    ss.last_error ? "⚠️ " + ss.last_error :
+    ss.last_ok    ? "✅ " + ss.last_ok :
+    ss.enabled    ? "מחובר, ממתין לשעה עגולה" : "מתעדכן כל שעה עגולה";
+
   if (!tasks.some(t => t.status === "running"))
     frozenLayout = null;
 
@@ -594,6 +603,13 @@ $("#spareSave").onclick = async ()=>{
   const m = parseFloat($("#spareMin").value) || 0;
   await api("/spare/set","POST",{minutes:m});
   $("#spareSave").blur();
+  await syncState(true);
+};
+
+// 🆕 רישום ידני לגוגל שיטס (לבדיקה)
+$("#btnSheetNow").onclick = async ()=>{
+  const r = await api("/sheet/sync_now","POST");
+  if (r && r.message) alert(r.message);
   await syncState(true);
 };
 
